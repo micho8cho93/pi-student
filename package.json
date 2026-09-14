@@ -1,0 +1,37 @@
+{
+  "name": "pi-student",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A terminal-first educational coding agent built on Pi.",
+  "engines": {
+    "node": ">=23.6.0"
+  },
+  "bin": {
+    "pi-student": "dist/cli.js",
+    "learn-agent": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "PI_STUDENT_DEV=1 tsx src/cli.ts",
+    "start": "node scripts/start-dev.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:sandbox": "npm run build && node dist/sandbox/smoke.js"
+  },
+  "dependencies": {
+    "@earendil-works/gondolin": "^0.12.0",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-tui": "^0.85.1",
+    "@huggingface/transformers": "^4.2.0",
+    "@supabase/supabase-js": "2.116.0",
+    "typebox": "^1.3.30"
+  },
+  "devDependencies": {
+    "@getpaseo/cli": "^0.8.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

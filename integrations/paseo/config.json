@@ -1,0 +1,61 @@
+{
+  "$schema": "https://paseo.sh/schemas/paseo.config.v1.json",
+  "version": 1,
+  "daemon": {
+    "listen": "127.0.0.1:6767",
+    "hostnames": ["127.0.0.1", "localhost", ".localhost"],
+    "enableTerminalAgentHooks": false,
+    "terminalProfiles": [],
+    "mcp": {
+      "enabled": false,
+      "injectIntoAgents": false
+    },
+    "relay": {
+      "enabled": false
+    }
+  },
+  "agents": {
+    "providers": {
+      "pi-student": {
+        "extends": "pi",
+        "label": "Pi Student",
+        "description": "The shared Pi Student educational agent runtime",
+        "command": ["__PI_STUDENT_RUNTIME__"],
+        "paseoTools": {
+          "enabled": false
+        },
+        "enabled": true,
+        "order": -100
+      },
+      "pi": { "enabled": false },
+      "claude": { "enabled": false },
+      "codex": { "enabled": false },
+      "copilot": { "enabled": false },
+      "opencode": { "enabled": false },
+      "omp": { "enabled": false }
+    }
+  },
+  "providers": {
+    "openai": {
+      "stt": {
+        "apiKey": "pi-student-voz",
+        "baseUrl": "http://127.0.0.1:6768/v1"
+      }
+    }
+  },
+  "features": {
+    "dictation": {
+      "enabled": true,
+      "stt": {
+        "provider": "openai",
+        "model": "voz"
+      }
+    },
+    "voiceMode": {
+      "enabled": false
+    },
+    "webUi": {
+      "enabled": true
+    }
+  }
+}

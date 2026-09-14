@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: darwin-arm64
+          - runner: macos-13
+            platform: darwin-x64
+          - runner: ubuntu-latest
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: ./scripts/package-release.sh "${{ matrix.platform }}" release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: release/*.tar.gz
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create checksums and release installer
+        env:
+          RELEASE_BASE: https://github.com/${{ github.repository }}/releases/latest/download
+        run: |
+          cd release
+          sha256sum pi-student-*.tar.gz > SHA256SUMS
+          cd ..
+          sed "s|__PI_STUDENT_RELEASE_BASE_URL__|${RELEASE_BASE}|g" install.sh > release/install.sh
+          chmod +x release/install.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*

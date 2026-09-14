@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.pi-learn/
+.env.local
+.DS_Store
+supabase/.temp/
