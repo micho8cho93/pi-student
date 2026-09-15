@@ -8,6 +8,7 @@
     "node": ">=23.6.0"
   },
   "bin": {
+    "pi": "dist/cli.js",
     "pi-student": "dist/cli.js",
     "learn-agent": "dist/cli.js"
   },

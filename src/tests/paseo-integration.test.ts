@@ -6,6 +6,7 @@ import { getInstallationPaths } from "../install/paths.js";
 import { buildPaseoConfig, readAndValidatePaseoConfig, validatePaseoConfig, writePaseoConfig } from "../integrations/paseo/config.js";
 import { launchPaseoGui, parsePaseoStatus, type PaseoCommandResult } from "../integrations/paseo/launcher.js";
 import { patchPaseoWebUi } from "../integrations/paseo/web-ui.js";
+import { patchPaseoDictationTimeout } from "../integrations/paseo/dictation-timeout-patch.js";
 
 async function fixture() {
 	const root = await mkdtemp(path.join(os.tmpdir(), "pi-student-paseo-"));
@@ -22,6 +23,22 @@ async function fixture() {
 const result = (stdout = "", status = 0, stderr = ""): PaseoCommandResult => ({ stdout, stderr, status });
 
 describe("Paseo integration", () => {
+	it("allows slow on-device dictation to return its final transcript", async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), "pi-student-paseo-dictation-"));
+		const executable = path.join(root, "node_modules", ".bin", "paseo");
+		const manager = path.join(root, "node_modules", "@getpaseo", "server", "dist", "server", "server", "dictation", "dictation-stream-manager.js");
+		try {
+			await mkdir(path.dirname(executable), { recursive: true });
+			await mkdir(path.dirname(manager), { recursive: true });
+			await writeFile(manager, "const DEFAULT_DICTATION_FINAL_TIMEOUT_MS = 10000;\n");
+			expect(await patchPaseoDictationTimeout(executable)).toBe(true);
+			expect(await readFile(manager, "utf8")).toContain("DEFAULT_DICTATION_FINAL_TIMEOUT_MS = 120000");
+			expect(await patchPaseoDictationTimeout(executable)).toBe(false);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("builds one locked-down Pi Student provider around the shared runtime", async () => {
 		const { root, paths } = await fixture();
 		try {
@@ -54,12 +71,54 @@ describe("Paseo integration", () => {
 			await writeFile(path.join(webUi, "index.html"), "<!doctype html><html><head></head><body></body></html>");
 			expect(await patchPaseoWebUi(executable)).toBe(true);
 			const patched = await readFile(path.join(webUi, "index.html"), "utf8");
-			expect(patched).toContain('data-pi-student-ui="student-v2"');
+			expect(patched).toContain('data-pi-student-ui="student-v5"');
 			expect(patched).toContain("workspace-new-tab-browser");
+			expect(patched).toContain('autoExpandReasoning: false');
+			expect(patched).toContain('toolCallDetailLevel: "detailed"');
+			expect(patched).toContain('compactToolCalls: false');
+			expect(patched).toContain("http://127.0.0.1:6769");
+			expect(patched).toContain('sidebar-project-workspace-list-scroll');
+			expect(patched).toContain('requestUrl.searchParams.set("workspaceId", workspaceId)');
+			expect(patched).toContain('const main = findMainArea()');
+			expect(patched).toContain('pageMount.id = "pi-student-ecosystem-page"');
+			expect(patched).toContain('pageRoot.appendChild(renderPanel())');
+			expect(patched).not.toContain('wrap.appendChild(renderPanel())');
+			expect(patched).toContain('.panel{box-sizing:border-box;width:min(100%,880px)');
+			expect(patched).not.toContain('width:min(520px,90vw)');
+			const script = patched.match(/<script data-pi-student-ui="student-v5">([\s\S]*?)<\/script>/)?.[1];
+			expect(script).toBeTruthy();
+			expect(() => new Function(script!)).not.toThrow();
 			expect(await patchPaseoWebUi(executable)).toBe(false);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
+	});
+
+	it("replaces older shell scripts instead of installing duplicate handlers", async () => {
+		const { root, paths } = await fixture();
+		const index = path.resolve(path.dirname(paths.paseoExecutable), "../../node_modules/@getpaseo/server/dist/server/web-ui/index.html");
+		try {
+			await mkdir(path.dirname(index), { recursive: true });
+			await writeFile(index, '<html><head><script data-pi-student-ui="student-v3">old()</script><script data-pi-student-ui="student-v4">old()</script></head></html>');
+			await patchPaseoWebUi(paths.paseoExecutable);
+			const html = await readFile(index, "utf8");
+			expect(html.match(/data-pi-student-ui=/g)).toHaveLength(1);
+			expect(html).not.toContain("old()");
+		} finally { await rm(root, { recursive: true, force: true }); }
+	});
+
+	it("restarts when speech changes cannot be hot reloaded", async () => {
+		const { root, paths } = await fixture();
+		const commands: string[][] = [];
+		try {
+			await launchPaseoGui({ paths, run(args) {
+				commands.push(args);
+				if (args[0] === "status") return result(JSON.stringify({ localDaemon: "running", connectedDaemon: "reachable" }));
+				if (args[0] === "reload") return result(JSON.stringify({ restartRequiredPaths: ["features.dictation.enabled"] }));
+				return result();
+			}, waitForReady: async () => true, open: () => {} });
+			expect(commands).toContainEqual(["daemon", "restart", "--web-ui", "--no-relay", "--no-mcp"]);
+		} finally { await rm(root, { recursive: true, force: true }); }
 	});
 
 	it("reuses a healthy daemon instead of starting a duplicate", async () => {

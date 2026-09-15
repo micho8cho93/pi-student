@@ -118,6 +118,9 @@ export async function createLearningAgentRuntime(
 		services.settingsManager.applyOverrides({
 			editorPaddingX: 1,
 			outputPad: 1,
+			// Keep reasoning available in the transcript without opening the
+			// disclosure by default. Students can expand it when they want detail.
+			hideThinkingBlock: true,
 			// Skills are not part of the student workflow.
 			enableSkillCommands: false,
 			// Keep Pi's resource inventory out of the student-facing header. The
@@ -244,7 +247,7 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 			if (!sandbox.isRunning()) await sandbox.start(workflow.state.cwd);
 			fallbackAttempted = false;
 			ctx.ui.setWorkingMessage("Understanding the request · Esc to stop");
-			ctx.ui.setHiddenThinkingLabel("Private reasoning hidden · follow the learning cues and tool activity");
+			ctx.ui.setHiddenThinkingLabel("Work notes hidden · select this line to review them");
 			if (ctx.mode === "tui") {
 				ctx.ui.setWorkingIndicator({ frames: [...WORKING_FRAMES], intervalMs: 90 });
 				ctx.ui.setStatus(progressKey, "ready · ask a question to begin");

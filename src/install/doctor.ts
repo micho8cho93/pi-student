@@ -29,6 +29,7 @@ export async function runDoctor(options: { verbose?: boolean; cwd?: string } = {
 	application.push(await fileCheck("Pi Student installed", path.join(paths.app, "dist", "cli.js"), options.verbose));
 	const launcher = await findExecutable("pi-student");
 	application.push({ label: "Launcher available", ok: Boolean(launcher), detail: launcher ?? `not on PATH (expected ${paths.launcher})` });
+	application.push(await fileCheck("Short pi command available", paths.shortLauncher, options.verbose));
 	application.push(await fileCheck("Shared runtime launcher available", paths.runtimeLauncher, options.verbose));
 
 	try {

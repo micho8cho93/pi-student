@@ -10,6 +10,7 @@ import {
 	renderAssistantLabel,
 	renderPanel,
 	renderUserLabel,
+	renderWorkNotesLabel,
 	type TerminalTheme,
 } from "./ui.js";
 import { BUNDLED_THEME_NAMES, DEFAULT_THEME, resolveThemeAlias } from "./themes.js";
@@ -57,14 +58,31 @@ export async function runRepl({
 	])}\n`);
 
 	let assistantOpen = false;
+	let workNotesOpen = false;
 	let pendingProviderError: string | undefined;
 	const unsubscribe = agent.session.subscribe((event) => {
 		if (event.type === "agent_start") workingProgress.start();
 		if (event.type === "turn_start") workingProgress.phase(LEARNING_CUES[2]);
 		if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_start") workingProgress.phase(LEARNING_CUES[2]);
+		if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+			workingProgress.stop();
+			if (!workNotesOpen) {
+				write(renderWorkNotesLabel(theme));
+				workNotesOpen = true;
+			}
+			write(theme.dim(event.assistantMessageEvent.delta));
+		}
+		if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_end" && workNotesOpen) {
+			write("\n");
+			workNotesOpen = false;
+		}
 		if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") workingProgress.phase(LEARNING_CUES[5]);
 		if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 			workingProgress.stop();
+			if (workNotesOpen) {
+				write("\n");
+				workNotesOpen = false;
+			}
 			if (!assistantOpen) {
 				write(renderAssistantLabel(theme));
 				assistantOpen = true;
@@ -72,6 +90,10 @@ export async function runRepl({
 			write(event.assistantMessageEvent.delta);
 		}
 		if (event.type === "message_end" && event.message.role === "assistant") {
+			if (workNotesOpen) {
+				write("\n");
+				workNotesOpen = false;
+			}
 			if (assistantOpen) {
 				write("\n");
 				assistantOpen = false;
@@ -93,7 +115,15 @@ export async function runRepl({
 		if (event.type === "tool_execution_start") {
 			workingProgress.start();
 			workingProgress.phase(toolLearningCue(event.toolName));
-			write(`\n${theme.muted("·")} ${theme.dim(`using ${event.toolName}`)}\n`);
+			if (workNotesOpen) {
+				write("\n");
+				workNotesOpen = false;
+			}
+			workingProgress.writeLine(`${theme.muted("·")} ${theme.dim(`using ${event.toolName}`)}`);
+		}
+		if (event.type === "tool_execution_end") {
+			const status = event.isError ? theme.error("✗") : theme.success("✓");
+			workingProgress.writeLine(`${status} ${theme.dim(`${event.toolName} ${event.isError ? "failed" : "finished"}`)}`);
 		}
 	});
 
@@ -171,6 +201,10 @@ export async function runRepl({
 			try {
 				await agent.session.prompt(message);
 			} catch (error) {
+				if (workNotesOpen) {
+					write("\n");
+					workNotesOpen = false;
+				}
 				if (assistantOpen) {
 					write("\n");
 					assistantOpen = false;

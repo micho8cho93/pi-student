@@ -32,7 +32,7 @@ remote is recorded in this source snapshot, so it cannot be filled in safely her
 The default installer detects macOS/Linux and arm64/x64, downloads a
 checksum-verified Pi Student archive and a pinned application-owned Node
 runtime, installs Paseo 0.8, prepares the sandbox image, boots a real VM, and
-installs the `pi-student` and `pi-student-runtime` launchers. It is safe to
+installs the `pi`, `pi-student`, and `pi-student-runtime` launchers. It is safe to
 rerun: project files, configuration, sessions, and caches are preserved, PATH
 entries are not duplicated, and an older working app/runtime is restored if
 verification of an update fails.
@@ -77,6 +77,32 @@ npm start
 The development start command builds the app, uses the repository's Paseo
 dependency, and creates a development shared-runtime launcher when needed. The
 release installer continues to use its application-owned Paseo runtime.
+
+## Publish student websites
+
+In the GUI, click **Connect** in the GitHub sidebar. Pi opens GitHub in your
+browser and shows a one-time code to copy. Approve access on GitHub and Pi
+updates the connection automatically. No terminal commands or separate GitHub
+CLI installation are needed.
+
+From the terminal, you can also connect and publish:
+
+```bash
+pi github connect
+pi publish
+```
+
+`pi-student github connect` and `pi-student publish` are equivalent when the
+short command is not installed. The first publish explains that the repository
+and source will be public and asks for confirmation. Pi then shows the major
+steps—Git repository, commit, push, and GitHub Pages deployment—and returns both
+the live site and repository URLs. Later publishes reuse the same repository.
+
+The GUI adds concise GitHub and Deployments sections to the left sidebar, plus
+repository and deployment detail panels. Both interfaces use the same host-side
+publishing service and metadata. See
+[GitHub publishing architecture](docs/github-publishing.md) for permissions,
+security boundaries, deployment behavior, and provider extension points.
 
 ## Shared runtime and Paseo
 
@@ -136,8 +162,12 @@ While the workspace and model are loading, Pi Student shows a small animated
 loader with rotating programming-history facts. During a response, the
 working indicator changes to student-facing milestones such as “Inspecting the
 relevant files” and “Running a check,” and the footer explains that `Esc` can
-stop the run. These are concise activity summaries and tool events; private
-model chain-of-thought is intentionally not displayed.
+stop the run. The assistant also writes concise public work notes before and
+after meaningful actions. Those notes, tool calls, edits, and verification
+results remain in chronological order after the response finishes; the closing
+summary is an addition, not a replacement. Provider-supplied reasoning remains
+available in a disclosure that is collapsed by default. Private model
+chain-of-thought and secrets are never requested.
 
 The installation is contained under `~/.pi-student/` by default:
 

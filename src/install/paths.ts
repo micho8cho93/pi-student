@@ -16,6 +16,7 @@ export interface InstallationPaths {
 	config: string;
 	runtimeMetadata: string;
 	launcher: string;
+	shortLauncher: string;
 	runtimeLauncher: string;
 }
 
@@ -40,6 +41,7 @@ export function getInstallationPaths(env: NodeJS.ProcessEnv = process.env): Inst
 		config,
 		runtimeMetadata: path.join(config, "runtime.json"),
 		launcher: path.join(bin, "pi-student"),
+		shortLauncher: path.join(bin, "pi"),
 		runtimeLauncher: path.join(bin, "pi-student-runtime"),
 	};
 }

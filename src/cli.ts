@@ -24,6 +24,8 @@ import { runTeacherCommand } from "./teacher/commands.js";
 import { launchPaseoGui } from "./integrations/paseo/launcher.js";
 import { createStartupCueLoader } from "./terminal/progress.js";
 import { disablePiStudentSlashCommands, isDisabledStudentSlashCommand } from "./terminal/slash-commands.js";
+import { runPublishingCommand } from "./publishing/commands.js";
+import { runEcosystemBridge } from "./publishing/ecosystem-bridge.js";
 
 async function main(): Promise<void> {
 	loadProjectEnv();
@@ -50,6 +52,10 @@ async function main(): Promise<void> {
 		await runVozBridge(Number(process.env.PI_STUDENT_VOZ_BRIDGE_PORT) || undefined);
 		return;
 	}
+	if (command === "ecosystem-bridge") {
+		await runEcosystemBridge(Number(process.env.PI_STUDENT_ECOSYSTEM_BRIDGE_PORT) || undefined);
+		return;
+	}
 	if (command === "doctor") {
 		process.exitCode = await runDoctor({ verbose: flags.includes("--verbose") }) ? 0 : 1;
 		return;
@@ -58,6 +64,7 @@ async function main(): Promise<void> {
 		process.exitCode = await runRepair({ verbose: flags.includes("--verbose") }) ? 0 : 1;
 		return;
 	}
+	if (command && await runPublishingCommand([command, ...flags])) return;
 	if (command && await runTeacherCommand([command, ...flags])) return;
 	if (command === "--unsafe-no-sandbox") {
 		await runTerminal([command]);
@@ -70,6 +77,9 @@ async function main(): Promise<void> {
 		process.stdout.write([
 			"Usage: pi-student [terminal|gui]",
 			"       pi-student [doctor|repair] [--verbose]",
+			"       pi-student publish [--yes]",
+			"       pi-student github [connect|status|repositories]",
+			"       pi-student deployments",
 			"       pi-student terminal --unsafe-no-sandbox",
 			"       pi-student auth login [email <address>|google]",
 			"       pi-student auth [verify email <address> <code>|status|logout]",

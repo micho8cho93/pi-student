@@ -54,7 +54,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 		request.resume(); return;
 	}
 	const body = await readBody(request);
-	const audio = extractAudio(body, request.headers["content-type"]);
+	const audio = await extractAudio(body, request.headers["content-type"]);
 	const audioPath = join(tmpdir(), `pi-student-paseo-voz-${randomUUID()}.wav`);
 	await writeFile(audioPath, audio, { mode: 0o600 });
 	try {
@@ -84,16 +84,14 @@ function readBody(request: IncomingMessage): Promise<Buffer> {
 	});
 }
 
-function extractAudio(body: Buffer, contentType: string | undefined): Buffer {
-	const boundaryMatch = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/iu);
-	const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2]?.trim();
-	if (!boundary) return body;
-	const headerEnd = body.indexOf(Buffer.from("\r\n\r\n"));
-	if (headerEnd < 0) throw new Error("Paseo sent an invalid multipart transcription request.");
-	const audioStart = headerEnd + 4;
-	const audioEnd = body.indexOf(Buffer.from(`\r\n--${boundary}`), audioStart);
-	if (audioEnd < 0) throw new Error("Paseo sent a transcription request without an audio file.");
-	return body.subarray(audioStart, audioEnd);
+export async function extractAudio(body: Buffer, contentType: string | undefined): Promise<Buffer> {
+	if (!contentType?.toLowerCase().startsWith("multipart/form-data")) return body;
+	// The OpenAI client may put model/options before the file. Parse the named
+	// file part instead of treating the first multipart field as audio.
+	const form = await new Response(new Uint8Array(body), { headers: { "content-type": contentType } }).formData();
+	const file = form.get("file");
+	if (!file || typeof file === "string" || file.size === 0) throw new Error("Paseo sent a transcription request without an audio file.");
+	return Buffer.from(await file.arrayBuffer());
 }
 
 function writeJson(response: ServerResponse, status: number, payload: unknown): void {

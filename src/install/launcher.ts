@@ -40,6 +40,8 @@ exec "\${NODE}" "\${APP}" runtime "$@"
 `;
 	await writeFile(paths.launcher, launcher, { mode: 0o755 });
 	await chmod(paths.launcher, 0o755);
+	await writeFile(paths.shortLauncher, launcher, { mode: 0o755 });
+	await chmod(paths.shortLauncher, 0o755);
 	await writeFile(paths.runtimeLauncher, runtimeLauncher, { mode: 0o755 });
 	await chmod(paths.runtimeLauncher, 0o755);
 }

@@ -7,7 +7,11 @@ import { getInstallationPaths, type InstallationPaths } from "../../install/path
 import { openBrowser } from "../../teacher/open-browser.js";
 import { PASEO_URL, writePaseoConfig } from "./config.js";
 import { PASEO_VOZ_BRIDGE_PORT } from "./voz-bridge.js";
+import { githubHelperDirectory } from "../../publishing/github-runtime.js";
+import { patchPaseoGitState } from "./git-state-patch.js";
 import { patchPaseoWebUi } from "./web-ui.js";
+import { ECOSYSTEM_BRIDGE_PORT } from "../../publishing/ecosystem-bridge.js";
+import { patchPaseoDictationTimeout } from "./dictation-timeout-patch.js";
 
 interface PaseoStatus {
 	localDaemon?: string;
@@ -48,15 +52,27 @@ export async function launchPaseoGui(options: LaunchPaseoOptions = {}): Promise<
 		throw new Error("Pi Student GUI could not find the shared runtime.\n\nRe-run the Pi Student installer.");
 	}
 
-	if (!options.run) await ensureVozBridge(paths);
+	if (!options.run) {
+		await ensureVozBridge(paths);
+		await ensureEcosystemBridge(paths, ECOSYSTEM_BRIDGE_PORT);
+	}
 	await writePaseoConfig(paths);
-	await patchPaseoWebUi(paseoExecutable);
-	const env = { ...process.env, PI_STUDENT_HOME: paths.root, PASEO_HOME: paths.paseoHome };
+	await patchPaseoWebUi(paseoExecutable, ECOSYSTEM_BRIDGE_PORT);
+	const gitServicePatched = await patchPaseoGitState(paseoExecutable);
+	const dictationTimeoutPatched = await patchPaseoDictationTimeout(paseoExecutable);
+	const env = { ...process.env, PI_STUDENT_HOME: paths.root, PASEO_HOME: paths.paseoHome,
+		PATH: `${process.env.PATH ?? ""}${path.delimiter}${githubHelperDirectory({ PI_STUDENT_HOME: paths.root })}` };
 	const statusResult = run(["status", "--json", "--no-color"], env);
 	const status = parsePaseoStatus(statusResult.stdout);
 	const ready = statusResult.status === 0 && status?.localDaemon === "running" && status.connectedDaemon === "reachable";
 	if (ready) {
-		run(["reload", "--no-color"], env);
+		const reload = run(["reload", "--json", "--no-color"], env);
+		if (reload.status !== 0) throw new Error(`Pi Student could not reload Paseo configuration: ${conciseError(reload.stderr || reload.stdout)}`);
+		const changes = JSON.parse(reload.stdout || "{}") as { restartRequiredPaths?: string[] };
+		if (gitServicePatched || dictationTimeoutPatched || changes.restartRequiredPaths?.length) {
+			const restart = run(["daemon", "restart", "--web-ui", "--no-relay", "--no-mcp"], env);
+			if (restart.status !== 0) throw new Error(`Pi Student could not restart Paseo to apply configuration: ${conciseError(restart.stderr || restart.stdout)}`);
+		}
 	} else {
 		const start = run(["daemon", "start", "--web-ui", "--no-relay", "--no-mcp"], env);
 		if (start.status !== 0) {
@@ -96,6 +112,25 @@ async function ensureVozBridge(paths: InstallationPaths): Promise<void> {
 	throw new Error("Pi Student could not start the local Voz transcription bridge.");
 }
 
+async function ensureEcosystemBridge(paths: InstallationPaths, port: number): Promise<void> {
+	if (await isEcosystemBridgeRunning(port)) return;
+	const entry = await findRuntimeEntry(paths);
+	if (!entry) throw new Error("Pi Student could not start its GitHub and deployment bridge because the runtime entrypoint is missing.");
+	const child = spawn(process.execPath, [entry, "ecosystem-bridge"], {
+		cwd: process.cwd(),
+		env: { ...process.env, PASEO_HOME: paths.paseoHome, PI_STUDENT_ECOSYSTEM_BRIDGE_PORT: String(port) },
+		stdio: "ignore",
+		detached: true,
+		windowsHide: true,
+	});
+	child.unref();
+	for (let attempt = 0; attempt < 30; attempt += 1) {
+		if (await isEcosystemBridgeRunning(port)) return;
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+	throw new Error("Pi Student could not start its GitHub and deployment bridge.");
+}
+
 async function isVozBridgeRunning(): Promise<boolean> {
 	try {
 		const response = await fetch("http://127.0.0.1:6768/health", { signal: AbortSignal.timeout(150) });
@@ -105,6 +140,15 @@ async function isVozBridgeRunning(): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+async function isEcosystemBridgeRunning(port: number): Promise<boolean> {
+	try {
+		const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(150) });
+		if (!response.ok) return false;
+		const body = await response.json() as { provider?: unknown; multiProject?: unknown };
+		return body.provider === "pi-student-ecosystem" && body.multiProject === true;
+	} catch { return false; }
 }
 
 async function findRuntimeEntry(paths: InstallationPaths): Promise<string | undefined> {

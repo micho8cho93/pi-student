@@ -81,6 +81,10 @@ export function renderAssistantLabel(theme: TerminalTheme): string {
 	return `\n${theme.accent("Pi")} ${theme.dim("· assistant")}\n`;
 }
 
+export function renderWorkNotesLabel(theme: TerminalTheme): string {
+	return `\n${theme.accent("Work notes")} ${theme.dim("· reasoning")}\n`;
+}
+
 export function renderUserLabel(theme: TerminalTheme, message: string): string {
 	return `\n${theme.bold("You")}\n${indent(message)}\n`;
 }

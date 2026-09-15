@@ -1,6 +1,6 @@
 import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { cueText, createStartupCueLoader, fitTerminalLine, LEARNING_CUES, toolLearningCue } from "../terminal/progress.js";
+import { cueText, createStartupCueLoader, createTerminalWorkingProgress, fitTerminalLine, LEARNING_CUES, toolLearningCue } from "../terminal/progress.js";
 
 describe("student-facing progress cues", () => {
 	it("maps tool activity to an understandable milestone", () => {
@@ -44,5 +44,22 @@ describe("student-facing progress cues", () => {
 	it("fits animated frames to one physical terminal row", () => {
 		expect(fitTerminalLine("123456789", 8)).toBe("1234567…");
 		expect(fitTerminalLine("short", 8)).toBe("short");
+	});
+
+	it("writes activity on its own durable line while the spinner continues", () => {
+		let output = "";
+		const stream = new Writable({
+			write(chunk, _encoding, callback) {
+				output += chunk.toString();
+				callback();
+			},
+		}) as Writable & { isTTY: boolean; columns: number };
+		stream.isTTY = true;
+		stream.columns = 100;
+		const progress = createTerminalWorkingProgress(stream);
+		progress.start();
+		progress.writeLine("✓ edit finished");
+		progress.stop();
+		expect(output).toContain("✓ edit finished\n");
 	});
 });

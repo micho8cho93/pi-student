@@ -127,6 +127,7 @@ export function createStartupCueLoader(output: NodeJS.WritableStream): StartupCu
 export interface TerminalWorkingProgress {
 	start(): void;
 	phase(cue: LearningCue): void;
+	writeLine(text: string): void;
 	stop(message?: string): void;
 }
 
@@ -157,6 +158,14 @@ export function createTerminalWorkingProgress(output: NodeJS.WritableStream): Te
 		phase(nextCue) {
 			cue = nextCue;
 			if (active && isInteractive) render();
+		},
+		writeLine(text) {
+			if (active && isInteractive) {
+				output.write(`\r\x1b[2K${text}\n`);
+				render();
+				return;
+			}
+			output.write(`${text}\n`);
 		},
 		stop(message = "Response ready") {
 			if (!active) return;

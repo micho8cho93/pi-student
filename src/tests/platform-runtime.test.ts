@@ -92,7 +92,9 @@ describe("installation state", () => {
 		try {
 			await installLauncher(paths);
 			const first = await readFile(paths.launcher, "utf8");
+			const short = await readFile(paths.shortLauncher, "utf8");
 			const runtime = await readFile(paths.runtimeLauncher, "utf8");
+			expect(short).toBe(first);
 			await installLauncher(paths);
 			expect(await readFile(paths.launcher, "utf8")).toBe(first);
 			expect(first).toContain("runtime/node/bin/node");
