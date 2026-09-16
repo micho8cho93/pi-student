@@ -13,6 +13,7 @@ export interface ProjectStandard { id: string; code?: string; title?: string }
 export interface ProjectSummary {
 	id: ProjectId;
 	classId: ClassId;
+	organizationId?: string;
 	name: string;
 	description: string | null;
 	brief?: Partial<ProjectBrief> | null;

@@ -1,0 +1,33 @@
+name: CI Organization Admin
+
+on:
+  push:
+    paths: &paths
+      - "apps/org-admin/**"
+      - "packages/organization/**"
+      - "packages/contracts/**"
+      - "packages/supabase-adapter/**"
+      - "packages/classroom/**"
+      - "packages/policy/**"
+      - "packages/shared/**"
+      - "package.json"
+      - "package-lock.json"
+      - "turbo.json"
+      - ".github/workflows/ci-org-admin.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+jobs:
+  org-admin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build:org-admin
+      - run: npm run test:org-admin
+      - run: npm run test:architecture

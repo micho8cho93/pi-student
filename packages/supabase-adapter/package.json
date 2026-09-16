@@ -10,7 +10,11 @@
     "./classroom-repository": "./dist/classroom-repository.js",
     "./config": "./dist/config.js",
     "./identity-provider": "./dist/identity-provider.js",
-    "./telemetry-sink": "./dist/telemetry-sink.js"
+    "./organization-authorization": "./dist/organization-authorization.js",
+    "./organization-entitlements": "./dist/organization-entitlements.js",
+    "./telemetry-sink": "./dist/telemetry-sink.js",
+    "./governance-policy": "./dist/governance-policy.js",
+    "./model-admission": "./dist/model-admission.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -20,6 +24,7 @@
   "dependencies": {
     "@pi-student/classroom": "*",
     "@pi-student/contracts": "*",
+    "@pi-student/organization": "*",
     "@pi-student/policy": "*",
     "@pi-student/shared": "*",
     "@supabase/supabase-js": "2.116.0"

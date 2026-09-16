@@ -1,0 +1,17 @@
+{
+  "name": "@pi-student/org-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "pi-student-org-admin": "dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. apps/org-admin/test"
+  },
+  "dependencies": {
+    "@pi-student/organization": "*",
+    "@pi-student/supabase-adapter": "*"
+  }
+}

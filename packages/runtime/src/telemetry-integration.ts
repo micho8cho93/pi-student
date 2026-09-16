@@ -5,7 +5,7 @@ import {
 	type ExtensionContext,
 	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import type { IdentityProvider, PolicyProvider, TelemetrySink } from "@pi-student/contracts";
+import type { IdentityProvider, ModelAdmissionProvider, PolicyProvider, TelemetrySink } from "@pi-student/contracts";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
 import { LearningEventBus } from "@pi-student/telemetry/events";
@@ -21,6 +21,7 @@ export interface StudentRuntimeServices {
 	identityProvider?: IdentityProvider;
 	policyProvider?: PolicyProvider;
 	telemetrySink?: TelemetrySink;
+	modelAdmission?: ModelAdmissionProvider;
 	classroom?: ClassroomRuntimeServices;
 	contextStore?: TeacherContextStore;
 	recordStore?: LearningRecordStore;
@@ -58,7 +59,7 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			let studentId: string | undefined;
 			try { studentId = (await identityProvider.getIdentity()).userId; }
 			catch { /* Offline recording remains available. */ }
-			if (!context.policy && services.policyProvider) {
+			if (services.policyProvider) {
 				const identity = await identityProvider.getIdentity().catch(() => ({ kind: "personal" as const }));
 				context = { ...context, policy: await services.policyProvider.resolvePolicy({ identity, projectId: context.projectId }) };
 			}
@@ -103,6 +104,20 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			bus.emit({ type: event.previousModel ? "MODEL_CHANGED" : "MODEL_SELECTED", provider: event.model.provider, model: event.model.id });
 		});
 		pi.on("thinking_level_select", async (event) => bus.emit({ type: "THINKING_LEVEL_CHANGED", level: event.level }));
+		pi.on("input", async (_event, ctx) => {
+			if (!activeContext.organizationId || !activeContext.projectId || !services.modelAdmission || !ctx.model) return;
+			try {
+				const decision = await services.modelAdmission.check(activeContext.projectId, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), recorder.getRecord()?.session.id);
+				if (decision.blocked) {
+					ctx.ui.notify(decision.action === "fallback" ? "The model budget is exhausted. Choose an approved fallback model." : "The organization AI budget or token limit has been reached.", "warning");
+					return { action: "handled" as const };
+				}
+				if (decision.warning) ctx.ui.notify("Organization usage is approaching its monthly limit.", "warning");
+			} catch {
+				ctx.ui.notify("Model authorization is unavailable. Reconnect before using organization AI.", "warning");
+				return { action: "handled" as const };
+			}
+		});
 
 		pi.on("message_end", async (event) => {
 			if (event.message.role !== "assistant") return;

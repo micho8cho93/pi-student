@@ -1,4 +1,4 @@
-import type { IdentityProvider, McpProvider, ModelDescriptor, PolicyProvider, RuntimeConfiguration, SkillProvider, TelemetrySink } from "@pi-student/contracts";
+import type { IdentityProvider, McpProvider, ModelAdmissionProvider, ModelDescriptor, PolicyProvider, RuntimeConfiguration, SkillProvider, TelemetrySink } from "@pi-student/contracts";
 import { SandboxManager, readSandboxMode, type SandboxProvider } from "@pi-student/sandbox/sandbox-manager";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import type { ClassroomRuntimeServices } from "./student-classroom.js";
@@ -11,6 +11,7 @@ export interface CreateStudentRuntimeOptions {
 	sandboxProvider: SandboxProvider;
 	policyProvider: PolicyProvider;
 	telemetrySink?: TelemetrySink;
+	modelAdmission?: ModelAdmissionProvider;
 	identityProvider: IdentityProvider;
 	classroom?: ClassroomRuntimeServices;
 	skills?: SkillProvider;
@@ -23,7 +24,7 @@ export class PiStudentRuntime {
 	readonly services: StudentRuntimeServices;
 	constructor(readonly options: CreateStudentRuntimeOptions) {
 		this.sandboxManager = new SandboxManager(options.projectPath, { provider: options.sandboxProvider });
-		this.services = { identityProvider: options.identityProvider, policyProvider: options.policyProvider, telemetrySink: options.telemetrySink, classroom: options.classroom, contextStore: options.classroom?.contextStore };
+		this.services = { identityProvider: options.identityProvider, policyProvider: options.policyProvider, telemetrySink: options.telemetrySink, modelAdmission: options.modelAdmission, classroom: options.classroom, contextStore: options.classroom?.contextStore };
 	}
 	get modelRuntime() { return this.options.modelProvider.runtime; }
 	get sandbox(): SandboxRuntime { return this.sandboxManager.runtime; }

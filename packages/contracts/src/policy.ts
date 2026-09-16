@@ -23,6 +23,10 @@ export interface EffectivePolicy {
 	projectId: ProjectId;
 	version: number;
 	settings: CapabilityPolicy;
+	/** Control-plane explanation. The runtime only consumes settings. */
+	provenance?: Record<string, { scope: "platform" | "organization" | "class" | "project" | "session"; version: number; reason: string }>;
+	sourceVersions?: Partial<Record<"platform" | "organization" | "class" | "project" | "session", number>>;
+	resolvedAt?: string;
 }
 
 export interface PolicyContext {

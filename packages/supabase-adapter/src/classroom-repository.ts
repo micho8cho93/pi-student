@@ -25,7 +25,7 @@ export class SupabaseClassroomRepository implements ClassroomRepository {
 
 	async listProjects(classId: string): Promise<ProjectSummary[]> {
 		const { data, error } = await this.client.from("projects")
-			.select("id,class_id,name,description,brief,capability_policy,policy_version,project_requirements(id,title,description,position),project_standards(standards(id,code,title))")
+			.select("id,class_id,name,description,brief,capability_policy,policy_version,classes(organization_id),project_requirements(id,title,description,position),project_standards(standards(id,code,title))")
 			.eq("class_id", classId).order("created_at", { ascending: false });
 		if (error) throw error;
 		return (data as unknown[]).map(row => mapProject(row as ProjectRow));
@@ -33,7 +33,7 @@ export class SupabaseClassroomRepository implements ClassroomRepository {
 
 	async getProject(projectId: string): Promise<ProjectSummary | undefined> {
 		const { data, error } = await this.client.from("projects")
-			.select("id,class_id,name,description,brief,capability_policy,policy_version,project_requirements(id,title,description,position),project_standards(standards(id,code,title))")
+			.select("id,class_id,name,description,brief,capability_policy,policy_version,classes(organization_id),project_requirements(id,title,description,position),project_standards(standards(id,code,title))")
 			.eq("id", projectId).maybeSingle();
 		if (error) throw error;
 		return data ? mapProject(data as unknown as ProjectRow) : undefined;
@@ -66,11 +66,11 @@ export class SupabaseClassroomRepository implements ClassroomRepository {
 }
 
 type Relation<T> = T | T[] | null;
-interface ProjectRow { id: string; class_id: string; name: string; description: string | null; brief?: Partial<ProjectBrief> | null; capability_policy?: unknown; policy_version?: number; project_requirements?: Array<{ id: string; title: string; description?: string; position: number }>; project_standards?: Array<{ standards: Relation<{ id: string; code?: string; title?: string }> }> }
+interface ProjectRow { id: string; class_id: string; name: string; description: string | null; classes?: Relation<{ organization_id: string | null }>; brief?: Partial<ProjectBrief> | null; capability_policy?: unknown; policy_version?: number; project_requirements?: Array<{ id: string; title: string; description?: string; position: number }>; project_standards?: Array<{ standards: Relation<{ id: string; code?: string; title?: string }> }> }
 function relation<T>(value: Relation<T>): T | undefined { return Array.isArray(value) ? value[0] : value ?? undefined; }
 function mapProject(row: ProjectRow): ProjectSummary {
 	return {
-		id: String(row.id), classId: String(row.class_id), name: row.name, description: row.description, brief: row.brief,
+		id: String(row.id), classId: String(row.class_id), ...(relation(row.classes)?.organization_id ? { organizationId: relation(row.classes)!.organization_id! } : {}), name: row.name, description: row.description, brief: row.brief,
 		policy: { projectId: String(row.id), version: row.policy_version ?? 1, settings: parseCapabilityPolicy(row.capability_policy) },
 		requirements: [...(row.project_requirements ?? [])].sort((a, b) => a.position - b.position),
 		standards: (row.project_standards ?? []).flatMap(link => { const value = relation(link.standards); return value ? [value] : []; }),

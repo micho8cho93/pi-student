@@ -20,7 +20,7 @@ import { runRepair } from "./install/repair.js";
 import { appendDiagnosticLog } from "./install/logging.js";
 import { createLearningSession } from "@pi-student/education/types";
 import { WorkflowController } from "@pi-student/education/workflow-controller";
-import { authenticateInBrowser, createPiSupabaseClient, readSupabaseConfig, saveSupabaseConfig, SupabaseClassroomRepository, SupabaseIdentityProvider, SupabaseTelemetrySink } from "@pi-student/supabase-adapter";
+import { authenticateInBrowser, createPiSupabaseClient, readSupabaseConfig, saveSupabaseConfig, SupabaseClassroomRepository, SupabaseGovernancePolicyProvider, SupabaseIdentityProvider, SupabaseModelAdmissionProvider, SupabaseTelemetrySink } from "@pi-student/supabase-adapter";
 import { launchPaseoGui } from "@pi-student/paseo-adapter/launcher";
 import { createStartupCueLoader } from "@pi-student/runtime/progress";
 import { disablePiStudentSlashCommands, isDisabledStudentSlashCommand } from "./terminal/slash-commands.js";
@@ -304,12 +304,16 @@ async function createApplicationRuntime(projectPath: string) {
 	}
 	const client = createPiSupabaseClient(config);
 	const identityProvider = new SupabaseIdentityProvider(client, "student");
+	const gatewayUrl = process.env.PI_STUDENT_MODEL_GATEWAY_URL?.trim();
 	return createStudentRuntime({
 		projectPath,
 		modelProvider,
 		sandboxProvider: new GondolinSandboxProvider(),
 		identityProvider,
-		policyProvider: new StoredPolicyProvider(() => contextStore.read()),
+		policyProvider: new SupabaseGovernancePolicyProvider(client, new StoredPolicyProvider(() => contextStore.read()), gatewayUrl ? {
+			url: gatewayUrl, configure: (projectId, url, profiles, token) => modelProvider.configureHostedProfiles(projectId, url, profiles, token),
+		} : undefined),
+		modelAdmission: new SupabaseModelAdmissionProvider(client, (token, sessionId) => modelProvider.refreshHostedToken(token, sessionId)),
 		telemetrySink: new SupabaseTelemetrySink(client),
 		classroom: {
 			repository: new SupabaseClassroomRepository(client),

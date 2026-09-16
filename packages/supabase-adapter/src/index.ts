@@ -3,4 +3,8 @@ export * from "./browser-auth.js";
 export * from "./classroom-repository.js";
 export * from "./config.js";
 export * from "./identity-provider.js";
+export * from "./organization-authorization.js";
+export * from "./organization-entitlements.js";
 export * from "./telemetry-sink.js";
+export * from "./governance-policy.js";
+export * from "./model-admission.js";

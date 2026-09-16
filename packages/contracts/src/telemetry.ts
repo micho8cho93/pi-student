@@ -60,6 +60,7 @@ export interface TeacherContext {
 
 export interface UsageEvent {
 	type: "usage";
+	eventId: string;
 	sessionId: SessionId;
 	organizationId?: OrganizationId;
 	classId?: ClassId;
@@ -67,6 +68,10 @@ export interface UsageEvent {
 	projectId?: ProjectId;
 	inputTokens: number;
 	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	provider: string;
+	model: string;
 	recordedAt: string;
 }
 

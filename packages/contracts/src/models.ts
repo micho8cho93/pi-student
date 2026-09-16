@@ -6,6 +6,19 @@ export interface ModelDescriptor {
 	contextWindow?: number;
 }
 
+/** Public catalog entry. Credentials and provider connection details are never included. */
+export interface ModelProfile {
+	id: string;
+	organizationId: string;
+	displayName: string;
+	provider: string;
+	providerModel: string;
+	allowedThinkingLevels: import("./policy.js").ThinkingLevel[];
+	available: boolean;
+	fallbackProfileId?: string;
+	version: number;
+}
+
 export interface ModelResolution {
 	descriptor: ModelDescriptor;
 	/** Provider-specific value consumed only by the application composition root. */
@@ -21,4 +34,9 @@ export interface ModelQuery {
 export interface ModelProvider {
 	listModels(query?: ModelQuery): Promise<ModelDescriptor[]>;
 	resolveModel(provider: string, modelId: string): Promise<ModelResolution | undefined>;
+}
+
+/** Optional host-side request admission. Implementations must fail closed for managed models. */
+export interface ModelAdmissionProvider {
+	check(projectId: string, provider: string, modelId: string, thinkingLevel: import("./policy.js").ThinkingLevel, sessionId?: string): Promise<{ warning: boolean; blocked: boolean; action?: "block_model" | "fallback" | "block_ai" }>;
 }

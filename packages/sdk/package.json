@@ -7,6 +7,7 @@
     ".": "./dist/index.js",
     "./classroom": "./dist/classroom/index.js",
     "./models": "./dist/models/index.js",
+    "./organization": "./dist/organization/index.js",
     "./policy": "./dist/policy/index.js",
     "./publishing": "./dist/publishing/index.js",
     "./runtime": "./dist/runtime/index.js",
@@ -21,6 +22,7 @@
   "dependencies": {
     "@pi-student/classroom": "*",
     "@pi-student/contracts": "*",
+    "@pi-student/organization": "*",
     "@pi-student/policy": "*",
     "@pi-student/publishing": "*",
     "@pi-student/runtime": "*",

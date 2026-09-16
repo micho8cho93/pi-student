@@ -4,8 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export class SupabaseTelemetrySink implements TelemetrySink {
 	constructor(private readonly client: SupabaseClient) {}
 	async record(event: TelemetryEvent): Promise<void> {
-		if (event.type !== "learning-record") return;
-		await uploadLearningRecord(this.client, event.record);
+		if (event.type === "learning-record") return uploadLearningRecord(this.client, event.record);
 	}
 }
 
