@@ -1,0 +1,19 @@
+{
+  "name": "@pi-student/paseo-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/index.js", "./*": "./dist/*.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. packages/paseo-adapter/test"
+  },
+  "dependencies": {
+    "@pi-student/education": "*",
+    "@pi-student/publishing": "*",
+    "@pi-student/runtime": "*",
+    "@pi-student/shared": "*",
+    "@pi-student/telemetry": "*"
+  }
+}

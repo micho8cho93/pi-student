@@ -1,0 +1,30 @@
+name: CI Database
+
+on:
+  push:
+    paths: &database-paths
+      - "infra/supabase/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci-database.yml"
+  pull_request:
+    paths: *database-paths
+  workflow_dispatch:
+
+jobs:
+  supabase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run infra:start
+      - run: npm run infra:reset
+      - run: npm run infra:lint
+      - run: npm run infra:test
+      - if: always()
+        run: npx supabase stop --workdir infra/supabase --no-backup

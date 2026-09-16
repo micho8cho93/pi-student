@@ -21,13 +21,13 @@ Pi core ── terminal UI / future GUI
       local teacher dashboard
 ```
 
-The reusable boundary is `src/telemetry/`. Interface code emits or adapts events; it does not construct database rows. `SessionRecorder` is deterministic and has no network dependency. `LearningRecordSyncService` accepts an uploader function so it can be tested without Supabase and replaced by another hosted service later.
+The reusable boundary is `packages/telemetry/`. Interface code emits or adapts events; it does not construct database rows. `SessionRecorder` is deterministic and has no network dependency. `LearningRecordSyncService` accepts an uploader function so it can be tested without Supabase and replaced by another hosted service later.
 
 The existing Pi extension API was the cleanest integration point. It already exposes model selection, thinking-level changes, provider usage, tool calls/results, and session shutdown for both terminal modes. The adapter checks file existence before successful `write`/`edit` calls to distinguish created from modified files. It records counts only—never paths or contents.
 
 ## Events and learning records
 
-The small typed event set lives in `src/telemetry/events.ts`. It includes session lifecycle, class/project selection, models, thinking level, file/test activity, assistance evidence, student decisions/blockers/questions, and confirmed reflection.
+The small typed event set lives in `packages/telemetry/src/events.ts`. It includes session lifecycle, class/project selection, models, thinking level, file/test activity, assistance evidence, student decisions/blockers/questions, and confirmed reflection.
 
 Each completed meaningful session produces one versioned record containing:
 
@@ -58,7 +58,7 @@ Records begin as `pending`. A stable UUID and database upsert make uploads idemp
 
 ## Supabase setup
 
-The reproducible schema is in `supabase/migrations/20260913083923_teacher_integration_mvp.sql`; the conversational brief is added by `supabase/migrations/20260913183002_project_brief_and_alignment.sql`. Apply both with your normal Supabase migration workflow. Current Supabase projects may not expose new public tables to the Data API automatically, so the migration includes explicit least-privilege grants as well as RLS.
+The reproducible schema is in `infra/supabase/migrations/20260913083923_teacher_integration_mvp.sql`; the conversational brief is added by `infra/supabase/migrations/20260913183002_project_brief_and_alignment.sql`. Apply the migrations with your normal Supabase workflow from the relocated infrastructure directory. Current Supabase projects may not expose new public tables to the Data API automatically, so the migration includes explicit least-privilege grants as well as RLS.
 
 Configure these environment variables for the CLI and local dashboard:
 
@@ -155,12 +155,12 @@ Every table has RLS enabled, including the private rate-limit table. `anon` rece
 - Students have no direct membership insert privilege. The narrowly granted `join_class` RPC always derives the student from `auth.uid()` and always assigns the `student` role.
 - Privileged helper functions live in the unexposed `private` schema, have fixed empty search paths, and are not callable by anonymous users. Public security-definer RPCs are explicitly revoked from `PUBLIC` and granted only to authenticated users after in-function identity/ownership checks.
 
-`supabase/tests/teacher_rls.test.sql` covers class creation, positive and negative cross-student and cross-teacher access, join-code states, approval, impersonation, and self-promotion. Run it against a local Supabase stack with:
+`infra/supabase/tests/teacher_rls.test.sql` covers class creation, positive and negative cross-student and cross-teacher access, join-code states, approval, impersonation, and self-promotion. Run it against a local Supabase stack with:
 
 ```bash
-supabase start
-supabase db reset
-supabase test db
+supabase --workdir infra start
+supabase --workdir infra db reset
+supabase --workdir infra test db
 ```
 
 ## Dashboard

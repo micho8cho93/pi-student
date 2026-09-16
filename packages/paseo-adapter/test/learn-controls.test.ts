@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+import { Script } from "node:vm";
+import { readFile, readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { patchLearnControlsSource } from "@pi-student/paseo-adapter/learn-controls-patch";
+import { studentUiScript } from "@pi-student/paseo-adapter/web-ui";
+
+describe("Learn composer adapter", () => {
+	it("generates valid script and uses session identity without submitting a message", () => {
+		const script = studentUiScript(6769).replace(/^\s*<script[^>]*>/, "").replace(/<\/script>\s*$/, "");
+		expect(() => new Script(script)).not.toThrow();
+		expect(script).toContain('button.setAttribute("aria-pressed", String(enabled))');
+		expect(script).toContain('agent-thinking-selector');
+		expect(script).toContain('combined-model-selector');
+		expect(script).toContain('button.className = anchor.className');
+		expect(script).toContain('message-input-root');
+		expect(script).toContain('pi-student-learn-next');
+		expect(script).toContain('position: "fixed"');
+		expect(script).toContain('document.body.appendChild(button)');
+		expect(script).toContain('if (!workspaceId || dictationIsActive())');
+		expect(script).toContain('[data-testid="dictation-confirm"], [data-testid="dictation-cancel"]');
+		expect(script).toContain('element.getAttribute("aria-label") === "Stop dictation"');
+		expect(script).toContain('removeLearnControls()');
+		expect(script).toContain('isVisible(container)');
+		expect(script).toContain('button.previousElementSibling !== anchorItem');
+		expect(script).toContain('anchorItem.insertAdjacentElement("afterend", button)');
+		expect(script).not.toContain('existing.dataset.agentId');
+		expect(script).not.toContain('button.style.setProperty("background"');
+		expect(script).not.toContain('color-mix(in srgb, currentColor 11%');
+		expect(script).not.toContain('border: "1px solid currentColor"');
+		expect(script).toContain('/learn-mode?workspaceId=');
+		expect(script).not.toContain('sendAgentMessage');
+		expect(script).toContain('let githubOpen = false');
+		expect(script).toContain('let deploymentsOpen = false');
+	});
+	it("patches the installed supported composer once and fails closed for unknown bundles", async () => {
+		const require = createRequire(import.meta.url);
+		const root = path.resolve(path.dirname(require.resolve("@getpaseo/cli/package.json")), "..", "server", "dist", "server", "web-ui", "_expo", "static", "js", "web");
+		const file = (await readdir(root)).find(f => /^index-[a-f0-9]+\.js$/.test(f))!;
+		const original = await readFile(`${root}/${file}`, "utf8");
+		const patched = patchLearnControlsSource(original);
+		expect(patched).toContain('"data-pi-student-agent-id":props.agentId');
+		expect(patchLearnControlsSource(patched)).toBe(patched);
+		expect(() => new Script(patched)).not.toThrow();
+		expect(() => patchLearnControlsSource("unknown vendor bundle")).toThrow("incompatible");
+	});
+});

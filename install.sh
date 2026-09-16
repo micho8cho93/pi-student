@@ -150,7 +150,7 @@ install_application() {
   verify_checksum "$TEMP_DIR/$artifact" "$artifact_checksum"
   mkdir -p "$INSTALL_STAGE/app"
   tar -xzf "$TEMP_DIR/$artifact" -C "$INSTALL_STAGE/app" >>"$LOG_FILE" 2>&1 || fail "The Pi Student archive could not be unpacked."
-  [ -f "$INSTALL_STAGE/app/dist/cli.js" ] || fail "The Pi Student release artifact is incomplete."
+  [ -f "$INSTALL_STAGE/app/apps/client/dist/cli.js" ] || fail "The Pi Student release artifact is incomplete."
   rm -rf "$INSTALL_ROOT/app.new"
   mv "$INSTALL_STAGE/app" "$INSTALL_ROOT/app.new"
   APP_BACKUP="$INSTALL_ROOT/app.previous.$$"
@@ -257,10 +257,10 @@ verify_installation() {
   export XDG_CACHE_HOME="$INSTALL_ROOT/cache"
   say "Setting up secure coding environment..."
   say "Downloading sandbox image if needed..."
-  if "$INSTALL_ROOT/runtime/node/bin/node" "$INSTALL_ROOT/app/dist/cli.js" repair >>"$LOG_FILE" 2>&1; then return; fi
+  if "$INSTALL_ROOT/runtime/node/bin/node" "$INSTALL_ROOT/app/apps/client/dist/cli.js" repair >>"$LOG_FILE" 2>&1; then return; fi
   log "Primary runtime verification failed; attempting QEMU fallback provisioning"
   provision_qemu
-  "$INSTALL_ROOT/runtime/node/bin/node" "$INSTALL_ROOT/app/dist/cli.js" repair >>"$LOG_FILE" 2>&1 || fail "The secure coding environment did not pass its startup test."
+  "$INSTALL_ROOT/runtime/node/bin/node" "$INSTALL_ROOT/app/apps/client/dist/cli.js" repair >>"$LOG_FILE" 2>&1 || fail "The secure coding environment did not pass its startup test."
 }
 
 main() {

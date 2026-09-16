@@ -1,0 +1,16 @@
+{
+  "name": "@pi-student/policy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/index.js", "./capability-policy": "./dist/capability-policy.js", "./capability-runtime": "./dist/capability-runtime.js", "./provider": "./dist/provider.js", "./thinking": "./dist/thinking.js", "./tool-policy": "./dist/tool-policy.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. packages/policy/test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@pi-student/contracts": "*"
+  }
+}

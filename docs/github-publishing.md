@@ -100,7 +100,7 @@ path.
 
 ## Adding a hosting provider
 
-Implement the `HostingProvider` interface in `src/publishing/types.ts`:
+Implement the `HostingProvider` interface in `packages/publishing/src/types.ts`:
 
 ```text
 publish → configure the first deployment

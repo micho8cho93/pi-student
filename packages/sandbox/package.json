@@ -1,0 +1,16 @@
+{
+  "name": "@pi-student/sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/index.js", "./sandbox-manager": "./dist/sandbox-manager.js", "./sandbox-runtime": "./dist/sandbox-runtime.js", "./types": "./dist/types.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. --passWithNoTests packages/sandbox/test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "typebox": "^1.3.30"
+  }
+}

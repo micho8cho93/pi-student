@@ -1,0 +1,17 @@
+# The repository currently has one valid GitHub owner. Conceptual stewardship is
+# documented in docs/code-ownership.md until dedicated teams exist.
+*                               @micho8cho93
+/packages/runtime/             @micho8cho93
+/packages/education/           @micho8cho93
+/packages/policy/              @micho8cho93
+/packages/sandbox/             @micho8cho93
+/packages/sandbox-gondolin/    @micho8cho93
+/packages/classroom/           @micho8cho93
+/packages/telemetry/           @micho8cho93
+/packages/publishing/          @micho8cho93
+/packages/paseo-adapter/       @micho8cho93
+/packages/supabase-adapter/    @micho8cho93
+/packages/sdk/                 @micho8cho93
+/apps/client/                  @micho8cho93
+/apps/teacher-console/         @micho8cho93
+/infra/supabase/               @micho8cho93

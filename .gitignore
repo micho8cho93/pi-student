@@ -3,4 +3,6 @@ dist/
 .pi-learn/
 .env.local
 .DS_Store
-supabase/.temp/
+infra/supabase/.temp/
+.turbo/
+apps/*/artifacts/

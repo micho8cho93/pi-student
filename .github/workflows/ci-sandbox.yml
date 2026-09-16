@@ -1,0 +1,37 @@
+name: CI Sandbox
+
+on:
+  push:
+    paths: &sandbox-paths
+      - "packages/sandbox/**"
+      - "packages/sandbox-gondolin/**"
+      - "packages/contracts/**"
+      - "packages/shared/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ci-sandbox.yml"
+  pull_request:
+    paths: *sandbox-paths
+  workflow_dispatch:
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npx turbo run build test --filter=@pi-student/sandbox-gondolin
+      - name: Install QEMU fallback
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: Boot sandbox and execute smoke command
+        env:
+          PI_STUDENT_HOME: ${{ runner.temp }}/pi-student
+          XDG_CACHE_HOME: ${{ runner.temp }}/pi-student/cache
+        run: npm run test:sandbox

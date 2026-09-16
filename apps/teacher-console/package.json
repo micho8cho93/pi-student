@@ -1,0 +1,24 @@
+{
+  "name": "@pi-student/teacher-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "pi-student-teacher": "dist/cli.js" },
+  "exports": { "./*": "./dist/*.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "package": "../../scripts/package-teacher-console.sh",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. apps/teacher-console/test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@pi-student/classroom": "*",
+    "@pi-student/policy": "*",
+    "@pi-student/runtime": "*",
+    "@pi-student/shared": "*",
+    "@pi-student/telemetry": "*",
+    "@pi-student/supabase-adapter": "*",
+    "@supabase/supabase-js": "2.116.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@pi-student/education",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/index.js", "./*": "./dist/*.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. packages/education/test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@pi-student/contracts": "*",
+    "@pi-student/policy": "*",
+    "@pi-student/sandbox": "*",
+    "@pi-student/shared": "*",
+    "typebox": "^1.3.30"
+  }
+}

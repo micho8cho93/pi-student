@@ -1,0 +1,30 @@
+{
+  "name": "@pi-student/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./classroom": "./dist/classroom/index.js",
+    "./models": "./dist/models/index.js",
+    "./policy": "./dist/policy/index.js",
+    "./publishing": "./dist/publishing/index.js",
+    "./runtime": "./dist/runtime/index.js",
+    "./sandbox": "./dist/sandbox/index.js",
+    "./telemetry": "./dist/telemetry/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. --passWithNoTests packages/sdk/test"
+  },
+  "dependencies": {
+    "@pi-student/classroom": "*",
+    "@pi-student/contracts": "*",
+    "@pi-student/policy": "*",
+    "@pi-student/publishing": "*",
+    "@pi-student/runtime": "*",
+    "@pi-student/sandbox": "*",
+    "@pi-student/telemetry": "*"
+  }
+}

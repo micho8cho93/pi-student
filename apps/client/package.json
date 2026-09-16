@@ -1,0 +1,31 @@
+{
+  "name": "@pi-student/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "pi": "dist/cli.js",
+    "pi-student": "dist/cli.js",
+    "pi-student-runtime": "dist/runtime-cli.js"
+  },
+  "exports": { "./*": "./dist/*.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "package": "../../scripts/package-release.sh",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --root ../.. apps/client/test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@pi-student/classroom": "*",
+    "@pi-student/education": "*",
+    "@pi-student/paseo-adapter": "*",
+    "@pi-student/publishing": "*",
+    "@pi-student/runtime": "*",
+    "@pi-student/sdk": "*",
+    "@pi-student/sandbox": "*",
+    "@pi-student/sandbox-gondolin": "*",
+    "@pi-student/shared": "*",
+    "@pi-student/supabase-adapter": "*"
+  }
+}

@@ -1,15 +1,16 @@
-name: Release
+name: Release Client
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  package:
+  package-client:
     strategy:
       fail-fast: false
       matrix:
@@ -35,8 +36,8 @@ jobs:
           name: ${{ matrix.platform }}
           path: release/*.tar.gz
 
-  publish:
-    needs: package
+  publish-client:
+    needs: package-client
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

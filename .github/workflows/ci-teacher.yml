@@ -1,0 +1,43 @@
+name: CI Teacher Console
+
+on:
+  push:
+    paths: &teacher-paths
+      - "apps/teacher-console/**"
+      - "packages/classroom/**"
+      - "packages/contracts/**"
+      - "packages/education/**"
+      - "packages/policy/**"
+      - "packages/runtime/**"
+      - "packages/sandbox/**"
+      - "packages/shared/**"
+      - "packages/supabase-adapter/**"
+      - "packages/telemetry/**"
+      - "scripts/package-teacher-console.sh"
+      - "package.json"
+      - "package-lock.json"
+      - "turbo.json"
+      - ".github/workflows/ci-teacher.yml"
+  pull_request:
+    paths: *teacher-paths
+  workflow_dispatch:
+
+jobs:
+  teacher-console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build:teacher
+      - run: npm run test:teacher
+      - name: Verify teacher package boundary
+        run: npm run package:teacher
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teacher-console-boundary
+          path: apps/teacher-console/artifacts/*.tar.gz
+          retention-days: 3

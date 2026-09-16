@@ -16,6 +16,20 @@ offer to save a finished file directly to the user's Desktop. This export
 requires confirmation, accepts only sandbox workspace files up to 100 MiB, and
 never overwrites an existing Desktop file.
 
+## Learn Mode
+
+Use **Learn ○ / Learn ●** beside the chat's thinking controls to explore the
+current codebase without leaving your workspace. Ask for an overview, an
+architecture diagram, a feature trace or an explanation of a particular file.
+Learn is read-oriented and does not quiz. Switching it off resumes the existing
+implementation workflow with the same conversation, model and thinking level.
+
+Terminal parity: `/learn [on|off]`. For separate active recall, use
+`/question [easy|medium|hard] [topic]`; `/question off` exits practice.
+
+See [Learn Mode implementation and validation](docs/learn-mode.md) for the shared
+repository model, persistence, GUI integration, supported analysis and limitations.
+
 ## Install
 
 Once this repository's GitHub release location is configured, installation is
@@ -77,6 +91,10 @@ npm start
 The development start command builds the app, uses the repository's Paseo
 dependency, and creates a development shared-runtime launcher when needed. The
 release installer continues to use its application-owned Paseo runtime.
+See [the monorepo architecture](docs/architecture.md) for application, package,
+dependency, and deployment boundaries. Embedders and new applications should
+use the supported [`@pi-student/sdk` facade](docs/sdk.md) instead of reaching
+into package implementation files.
 
 ## Publish student websites
 
@@ -126,7 +144,7 @@ carried over Pi's RPC extension-UI protocol and rendered by Paseo.
 Pi Student uses an isolated Paseo configuration under
 `~/.pi-student/paseo/`. Unrelated providers are hidden, relay and Paseo MCP tool
 injection are disabled, and only the local web UI is enabled. See
-[`integrations/paseo/README.md`](integrations/paseo/README.md) for the integration
+[`packages/paseo-adapter/README.md`](packages/paseo-adapter/README.md) for the integration
 contract.
 
 Paseo 0.8 still includes general-purpose workspace, terminal, and Git screens
@@ -252,7 +270,7 @@ An unsafe host backend exists only for explicit local development:
 
 ```bash
 npm run build
-node dist/cli.js --unsafe-no-sandbox
+node apps/client/dist/cli.js --unsafe-no-sandbox
 ```
 
 The legacy `SANDBOX_MODE=host` environment setting is retained for automated
@@ -268,13 +286,41 @@ npm test
 npm run build
 ```
 
+The deployment units can also be validated independently:
+
+```bash
+npm run build:client
+npm run test:client
+npm run package:client
+
+npm run build:teacher
+npm run test:teacher
+npm run package:teacher
+```
+
+The client package is the curl-installable platform artifact. The teacher
+console also has its own artifact; its local command remains in the client
+archive temporarily for compatibility, without being a client workspace
+dependency. Supabase is an infrastructure boundary and is validated separately:
+
+```bash
+npm run infra:start
+npm run infra:reset
+npm run infra:lint
+npm run infra:test
+```
+
+These commands use only a local Supabase stack. They do not deploy migrations
+to a linked or production project.
+
 Run the real virtualization smoke test separately:
 
 ```bash
 npm run test:sandbox
 ```
 
-Build a platform release archive with:
+Build the current host's platform release archive with `npm run package:client`,
+or select and validate a platform label explicitly with:
 
 ```bash
 ./scripts/package-release.sh darwin-arm64
@@ -287,7 +333,7 @@ GitHub release.
 
 See [docs/sandbox-architecture.md](docs/sandbox-architecture.md) for the security
 boundary and runtime lifecycle. See
-[src/education/intent.ts](src/education/intent.ts) for intent routing and
+[packages/education/src/intent.ts](packages/education/src/intent.ts) for intent routing and
 student questions, project context, and the Learning Boundary.
 
 ## Optional teacher integration
@@ -296,7 +342,7 @@ Teacher integration adds structured learning records and a small dashboard while
 keeping standalone Pi Student fully functional. It never syncs API keys, source
 files, raw prompts, complete responses, or transcripts.
 
-Configure a Supabase project with the migration under `supabase/migrations/`,
+Configure a Supabase project with the migrations under `infra/supabase/migrations/`,
 then set its public client values (never a service-role or secret key):
 
 ```bash
@@ -314,6 +360,9 @@ the terminal dashboard at:
 ```bash
 pi-student teacher
 ```
+
+The independently packaged entrypoint is `pi-student-teacher`; it is prepared
+for later hosted deployment while the compatibility command above remains.
 
 The explicit `tui` alias is also available:
 
