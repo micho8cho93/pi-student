@@ -74,10 +74,8 @@ The publishable key is intended for public clients and is safe only in combinati
 
 In Supabase Auth:
 
-1. Keep email magic-link sign-in enabled.
-2. Add `http://127.0.0.1:4173/auth/callback` and the CLI callback pattern `http://127.0.0.1:*/auth/callback` to allowed redirect URLs for local development (use the exact deployed dashboard callback URL in production).
-3. Enable Google under Auth → Sign In / Providers and configure a Google Web OAuth client. Add Supabase's provider callback URL—not the local Pi Student URL—to the Google OAuth client's authorized redirect URIs. The local config includes the provider block; set `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID` and `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_SECRET` before `supabase start`.
-4. If email delivery reports a rate-limit error, wait for the per-address cooldown or configure custom SMTP. Supabase's built-in email service is intentionally limited; the local config permits more attempts for development, but it cannot raise a hosted project's delivery quota.
+1. Add `http://127.0.0.1:4173/auth/callback` and the CLI callback pattern `http://127.0.0.1:*/auth/callback` to allowed redirect URLs for local development (use the exact deployed dashboard callback URL in production).
+2. Enable Google under Auth → Sign In / Providers and configure a Google Web OAuth client. Add Supabase's provider callback URL—not the local Pi Student URL—to the Google OAuth client's authorized redirect URIs. The local config includes the provider block; set `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID` and `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_SECRET` before `supabase start`.
 
 The CLI stores only the Supabase user session locally in `~/.pi-student/config/supabase-auth.json` with mode `0600`. It is not exposed to the model or sandbox.
 
@@ -103,14 +101,12 @@ The terminal dashboard also supports `/dictate` for speaking a dashboard
 command and `/dictation` for guided provider setup. Dictation is deliberately
 terminal-only and is not exposed by the localhost browser dashboard.
 
-Sign in with Google or an email magic link, create a class, and share its six-character join code. The dashboard now uses an explicit `/auth/callback` route for both providers and offers email-code verification when the configured email template includes a six-digit OTP. Codes are generated with cryptographic randomness, can expire, can be paused, and can be regenerated. The `join_class` database function limits each signed-in user to ten attempts per fifteen minutes. Valid joins create a `pending` student membership; the teacher approves or rejects it in the dashboard.
+Sign in with Google, create a class, and share its six-character join code. The dashboard uses an explicit `/auth/callback` route for the PKCE OAuth exchange. The `join_class` database function limits each signed-in user to ten attempts per fifteen minutes. Valid joins create a `pending` student membership; the teacher approves or rejects it in the dashboard.
 
 The core teacher workflow is also available without opening the dashboard:
 
 ```bash
 pi-student teacher auth login google
-pi-student teacher auth login email teacher@example.edu
-pi-student teacher auth verify email teacher@example.edu 123456
 pi-student teacher class create "AP CSP — Period 2"
 pi-student teacher class list
 pi-student teacher class members <class-id>
@@ -124,8 +120,7 @@ pi-student teacher project list <class-id>
 Student flow:
 
 ```bash
-pi-student auth login email student@example.edu
-# or: pi-student auth login google
+pi-student auth login google
 pi-student class join ABC-234
 pi-student class list
 pi-student class select <class-id>

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(18);
+select plan(24);
 
 insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) values
  ('71000000-0000-0000-0000-000000000001','authenticated','authenticated','governance-owner@example.test','{}','{}'),
@@ -37,7 +37,7 @@ select ok(set_config('governance.profile',public.save_model_profile('72000000-00
 select lives_ok($$ select public.save_model_price('72000000-0000-0000-0000-000000000001',current_setting('governance.profile')::uuid,'2026-09',2000000,4000000,0,0) $$,'owner records immutable price version');
 select lives_ok($$ select public.save_governance_policy('72000000-0000-0000-0000-000000000001','organization',null,null,'{"internet":false}'::jsonb,array['internet','models']) $$,'owner saves organization policy and delegation');
 select results_eq($$ select count(*) from public.administrative_audit_events where organization_id='72000000-0000-0000-0000-000000000001' and target_type='model_profiles' $$,$$ values (1::bigint) $$,'model change audited');
-select lives_ok($$ select public.save_organization_budget('72000000-0000-0000-0000-000000000001','organization',null,null,null,200,100,0.800,'block_ai') $$,'owner sets budget');
+select lives_ok($$ select public.save_organization_budget('72000000-0000-0000-0000-000000000001','organization',null,null,null,100000,50000,0.800,'block_ai') $$,'owner sets budget');
 select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000002',true);
 select lives_ok($$ select public.save_governance_policy('72000000-0000-0000-0000-000000000001','class','73000000-0000-0000-0000-000000000001',null,'{"internet":false}'::jsonb,'{}') $$,'teacher can restrict delegated class setting');
 do $$ begin
@@ -59,10 +59,34 @@ do $$ begin
  exception when insufficient_privilege then null; end;
 end $$;
 select pass('student has no direct ledger write');
-select lives_ok($$ select public.record_reported_model_usage('76000000-0000-0000-0000-000000000001','74000000-0000-0000-0000-000000000001',
-  '77000000-0000-0000-0000-000000000001','institution',current_setting('governance.profile'),100,0,0,0) $$,'student records approved model usage');
+do $$ begin
+ begin
+  perform public.gateway_reserve_model_request(auth.uid(),'74000000-0000-0000-0000-000000000001',
+    current_setting('governance.profile')::uuid,'low',32000,4096);
+  raise exception 'student reserved gateway usage';
+ exception when insufficient_privilege then null; end;
+end $$;
+select pass('student cannot forge metered usage');
+set local role service_role;
+select ok(set_config('governance.reservation',(
+  public.gateway_reserve_model_request('71000000-0000-0000-0000-000000000003','74000000-0000-0000-0000-000000000001',
+    current_setting('governance.profile')::uuid,'low',32000,4096)->>'reservationId'),true) <> '',
+  'gateway reserves bounded usage for an approved student and model');
+select lives_ok($$ select public.gateway_settle_model_request(current_setting('governance.reservation')::uuid,
+  '77000000-0000-0000-0000-000000000001',100,0,0,0) $$,'gateway settles provider-reported usage');
+reset role;
+select results_eq($$ select source,pricing_version from public.usage_ledger where id=current_setting('governance.reservation')::uuid $$,
+ $$ values ('gateway'::text,'2026-09'::text) $$,'ledger stores trusted source and price version');
+set local role authenticated;
+select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000001',true);
+select lives_ok($$ select public.save_organization_budget('72000000-0000-0000-0000-000000000001','organization',null,null,null,200,100,0.800,'block_ai') $$,'owner lowers monthly budget');
+select is((public.organization_usage_totals('72000000-0000-0000-0000-000000000001',(now() at time zone 'UTC')::date)->>'knownCostMicros')::bigint,200::bigint,
+  'organization dashboard totals include all daily slices');
 select results_eq($$ select input_tokens,known_cost_micros from public.usage_daily where organization_id='72000000-0000-0000-0000-000000000001' $$,
  $$ values (100::bigint,200::bigint) $$,'daily aggregate and versioned cost are correct');
+select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000003',true);
+select results_eq($$ select count(*) from public.usage_daily where organization_id='72000000-0000-0000-0000-000000000001' $$,
+ $$ values (0::bigint) $$,'student cannot read organization usage slices');
 select is((public.check_model_budget('74000000-0000-0000-0000-000000000001',current_setting('governance.profile')::uuid)->>'blocked')::boolean,true,'hard limit blocks subsequent request');
 do $$ begin
  begin

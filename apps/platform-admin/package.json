@@ -3,12 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "pi-student-platform-admin": "dist/cli.js" },
+  "bin": {
+    "pi-student-platform-admin": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --root ../.. apps/platform-admin/test"
   },
-  "dependencies": { "@pi-student/organization": "*", "@pi-student/supabase-adapter": "*" }
+  "dependencies": {
+    "@pi-student/organization": "*",
+    "@pi-student/supabase-adapter": "*",
+    "@pi-student/shared": "*"
+  }
 }

@@ -7,4 +7,5 @@ export { FileTeacherContextStore, LearningRecordStore, LearningRecordSyncService
 export type {
 	IdentityContext, IdentityProvider, ModelDescriptor, ModelProvider, PolicyProvider,
 	RuntimeConfiguration, SkillDescriptor, SkillProvider, McpDescriptor, McpProvider, TelemetrySink,
+	SandboxConfig, SandboxProfile, SandboxProfileProvider, ManagedDataset, ExtensionCapability, ExtensionScope,
 } from "@pi-student/contracts";

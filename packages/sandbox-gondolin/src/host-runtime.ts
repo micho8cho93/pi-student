@@ -14,6 +14,7 @@ import {
 
 /** Development/test backend. Unsafe for student use: processes run on the host. */
 export class HostRuntime implements SandboxRuntime {
+	readonly mode = "host" as const;
 	private projectPath?: string;
 	private running = false;
 

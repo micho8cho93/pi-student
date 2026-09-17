@@ -16,7 +16,7 @@ packages/
   sandbox-gondolin/ supabase-adapter/ paseo-adapter/
 infra/
   supabase/               migrations, config, and pgTAP tests
-services/                 reserved workspace namespace; no services yet
+services/model-gateway/    trusted institution model proxy and usage metering
 tooling/                  architecture and release-boundary checks
 docs/adr/                 architecture decision records
 ```
@@ -126,7 +126,7 @@ Artifact allow lists are enforced independently by `tooling/verify-release-artif
 
 `apps/org-admin` and `apps/platform-admin` are separate workspace packages and processes. They run on ports 4174 and 4175 by default, accept only a Supabase URL and publishable key, and rely on database RLS and restricted RPCs. The former requires an active organization owner/admin plus the `organization_admin` entitlement. The latter requires a row in `platform_administrators`, provisioned by trusted SQL. A platform operator can see aggregate class, member, student, and session counts, but platform role alone does not grant class or student content access. Both applications can be built and validated independently in Turbo and CI. The student client and teacher console have no dependency on either app.
 
-`services/control-plane-api` remains absent. Database RPCs provide the transactional boundary for membership, entitlement, platform configuration, and audit events. A trusted model gateway remains necessary for hard budgets and institution-held provider credentials. See [ADRs 0006–0011](adr/README.md).
+`services/control-plane-api` remains absent. Database RPCs provide the transactional boundary for membership, entitlement, platform configuration, and audit events. `services/model-gateway` holds institution provider credentials and reserves and settles usage through service-role RPCs. See [ADRs 0006–0011](adr/README.md).
 
 ## Reserved future boundaries
 
@@ -145,3 +145,10 @@ When real implementations are approved, apps depend on the SDK/control-plane API
 Organizations are tenants above classes. `organization_memberships` is separate from `class_members`; managed classes have `classes.organization_id`, and existing standalone classes keep `NULL`. Database RLS combines active tenant membership with class membership for teacher operations, while students continue to use class membership. The governance adapter translates platform → organization → class → project → session policy layers into one `EffectivePolicy`; the learning engine does not understand tenancy, billing, or the hierarchy.
 
 See [the Organization status record](organization-readiness.md) and [ADR 0005](adr/0005-organization-tenancy-foundation.md) for transitional ownership and authorization decisions.
+# Phase 4 institutional environments (control plane)
+
+An organization administrator creates immutable sandbox profile revisions, versioned dataset references, and scoped profile bindings. Resolution precedence is project → class → organization. `resolve_institutional_environment` authorizes the active class member and returns one profile plus enabled, approved, in-scope Skill/MCP descriptors; it never returns secret references or endpoint/command metadata. The runtime combines this with `EffectivePolicy` before sandbox startup and repeats resolution when an assignment changes. No runtime component queries organization hierarchy. For personal and standalone classroom sessions, the existing local sandbox remains in use.
+
+The registry and provider-neutral contracts are implemented, but the packaged Gondolin provider cannot yet consume a verified custom image or artifact-mounted dataset and intentionally refuses managed profiles. Skills remain disabled in Pi's student resource loader and MCP registry entries remain non-executable metadata until a verified extension broker enforces capabilities and host-managed secrets. Pending/failed profile revisions cannot be assigned. See ADRs 0012–0014 for the trust boundary and outstanding provider/broker work.
+
+Phase 5 remains out of scope: LMS integrations, enterprise SSO, SCIM, regional hosting, dedicated tenants and customer private-network infrastructure.

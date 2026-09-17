@@ -1,0 +1,7 @@
+# 0014 — Skills and MCP trust and permissions
+
+Status: accepted for registry and admission; execution broker remains separate.
+
+Organization administrators import Skills by immutable artifact digest and register MCPs as HTTPS endpoint metadata or content-addressed stdio artifacts. Entries start pending and disabled. Admin review records approval, scope, version and explicit capabilities: filesystem, network, shell, GitHub, database, external API and secrets. The control-plane resolver returns only enabled, approved, in-scope entries and intersects requested capabilities with effective project policy. Secrets are never granted to the student process. The MCP registry stores only opaque `vault://` references, not values, and its student-facing RPC omits even those references, endpoints and command artifacts.
+
+The student Pi loader continues to use `noSkills: true`; registration does not execute imported code. No MCP subprocess or network client is launched merely because an entry is enabled. A future trusted broker must verify artifact digests/signatures, run stdio processes only inside a policy-constrained sandbox, enforce HTTPS destination/redirect/DNS/egress allowlists, resolve secrets on the server per invocation, scope credentials to the target and avoid sending them to logs, model prompts or student clients. Permission updates are audited without credential material. An explicit execution adapter and end-to-end isolation tests are required before exposing extension tools to students.

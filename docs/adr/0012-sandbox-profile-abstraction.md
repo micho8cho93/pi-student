@@ -1,0 +1,9 @@
+# 0012 — Provider-neutral sandbox profiles
+
+Status: accepted for the control plane; managed execution requires a certified provider.
+
+An organization owns immutable profile revisions. A revision names a runtime/version, pinned packages with SHA-256 integrity, immutable image digest, network requirements, resource limits and dataset revisions. A trusted image builder alone may transition a pending revision to ready (or failed); a failed build cannot be assigned. Updating creates another revision, and rollback changes only the scope binding to a previously ready revision. The organization, class and project bindings select the most specific revision, with no implicit cross-tenant lookup.
+
+The Supabase resolver checks active class membership and returns one normalized profile. The student runtime receives this configuration before creating the sandbox and again when changing assignments; it does not query tenant hierarchy. Standalone sessions use the existing local sandbox path. Managed sessions never select host mode. The provider must reject any profile whose image digest, package build, mounts, network restrictions or limits it cannot enforce. The packaged Gondolin adapter deliberately rejects managed profiles until a verified image/build-and-mount adapter is deployed, rather than claiming to enforce quotas or silently installing packages on the host. The base Gondolin path remains available for a managed organization without a profile binding, with internet disabled by default.
+
+Build infrastructure should resolve lockfiles inside an isolated build sandbox, verify integrity, pin its base image, publish a content-addressed image and report ready/failed using the service role. Do not grant students or browser administrators permission to mark images ready. A future provider integration must verify artifact hashes at launch, bound CPU/memory/storage/time, enforce egress per host and support atomic rollback of bindings.

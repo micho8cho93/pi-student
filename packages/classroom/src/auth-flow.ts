@@ -6,7 +6,7 @@ export type AuthCallback =
 
 /**
  * The callback is served by the local dashboard. Keeping this path stable
- * makes it possible to allow one redirect URL for both Google and email auth.
+ * makes it possible to allow one redirect URL for the Google OAuth flow.
  */
 export function teacherAuthCallbackUrl(origin: string): string {
 	return new URL("/auth/callback", origin).toString();
@@ -40,9 +40,6 @@ export function describeAuthError(error: unknown): string {
 	}
 	if (normalized.includes("provider") && (normalized.includes("enable") || normalized.includes("support"))) {
 		return `${message} Enable Google under Supabase Auth → Sign In / Providers → Google, then add the OAuth callback URL shown there in Google Cloud.`;
-	}
-	if (normalized.includes("rate") || normalized.includes("too many") || normalized.includes("email")) {
-		return `${message} You can use an email OTP with “Verify code”, or wait for the email limit to reset. Custom SMTP raises the built-in provider's delivery limit.`;
 	}
 	return message;
 }

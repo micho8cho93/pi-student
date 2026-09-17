@@ -14,7 +14,8 @@
     "./organization-entitlements": "./dist/organization-entitlements.js",
     "./telemetry-sink": "./dist/telemetry-sink.js",
     "./governance-policy": "./dist/governance-policy.js",
-    "./model-admission": "./dist/model-admission.js"
+    "./model-admission": "./dist/model-admission.js",
+    "./institutional-environment": "./dist/institutional-environment.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

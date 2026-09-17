@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "pi-student-org-admin": "dist/cli.js" },
+  "bin": {
+    "pi-student-org-admin": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/cli.js",
@@ -12,6 +14,7 @@
   },
   "dependencies": {
     "@pi-student/organization": "*",
-    "@pi-student/supabase-adapter": "*"
+    "@pi-student/supabase-adapter": "*",
+    "@pi-student/shared": "*"
   }
 }

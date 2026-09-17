@@ -1,6 +1,6 @@
 # Organization foundation status
 
-Phase 1 establishes organization tenancy without changing the student runtime. Phase 2 adds the two administration applications, entitlements, platform operations, and audit events. Phase 3 governance is in progress; see ADRs 0010 and 0011 for the implemented control plane and the remaining enforcement gap.
+Phase 1 establishes organization tenancy without changing the student runtime. Phase 2 adds the two administration applications, entitlements, platform operations, and audit events. Phase 3 adds policy resolution, institution models, a trusted model gateway, usage metering, and budgets; see ADRs 0010 and 0011.
 
 ## Implemented
 
@@ -32,13 +32,13 @@ Removing an organization membership revokes managed teacher/admin access. Removi
 - An active owner is required. Tenant admins cannot appoint or remove owners/admins; owners can manage roles but cannot remove the final active owner. Platform admin appointment does not change ownership.
 - Suspending an organization stops organization role resolution for admin and teacher operations. Existing students retain their own class learning records under Phase 1 class membership policies.
 
-To run the applications, build each workspace and start `node apps/org-admin/dist/cli.js` or `node apps/platform-admin/dist/cli.js`. Configure the same publishable Supabase environment variables as the teacher console and add the corresponding `/auth/callback` URLs to Supabase Auth redirect settings. To bootstrap a platform operator, insert an existing profile ID into `public.platform_administrators` through a trusted SQL administration session. Never expose service-role credentials to either app.
+To run the applications, build each workspace and start `node apps/org-admin/dist/cli.js` or `node apps/platform-admin/dist/cli.js`. Configure the same publishable Supabase environment variables as the teacher console, enable its Google provider, and add the corresponding `/auth/callback` URLs to Supabase Auth redirect settings. Both admin applications sign in with Google OAuth, without sending Supabase sign-in emails; access still requires the existing platform operator or active organization owner/admin record. To bootstrap a platform operator, insert an existing profile ID into `public.platform_administrators` through a trusted SQL administration session. Never expose service-role credentials to either app.
 
 ## Phase 3 governance status
 
-The organization admin has Models, Policies, Usage, and Budgets sections. Models are versioned approved profiles with optional fallback links and versioned price records. Policies resolve to one auditable `EffectivePolicy` before entering the learning runtime. Usage is recorded by an idempotent client outbox and aggregated by day. Budget preflight blocks new requests through the normal client flow when a recorded limit is reached. The platform dashboard shows aggregate usage by organization.
+The organization admin has Models, Policies, Usage, and Budgets sections. Models are versioned approved profiles with optional fallback links and versioned price records. Policies resolve to one auditable `EffectivePolicy` before entering the learning runtime. The institution model gateway verifies each student request, reserves a bounded budget, and records provider-reported usage before returning a response. Usage is aggregated by day. The platform dashboard shows aggregate usage by organization.
 
-The direct provider path cannot guarantee client reports or hard budgets. Organization provider credentials are not accepted by the client and must remain server-side. A trusted gateway and a successful local migration/pgTAP run are required before marking Organization V1 complete.
+Organization provider credentials remain server-side. Deployment requires `PI_STUDENT_MODEL_GATEWAY_URL` in the managed client and a gateway configured with Supabase service credentials and `PI_STUDENT_GATEWAY_PROVIDERS`. On 2026-09-17, the seven local migrations and live Supabase migration history were aligned, the organization schema was applied, and all 108 assertions across the five pgTAP suites passed in rolled-back live transactions. The hosted gateway still needs deployment and an end-to-end model request before marking Organization V1 ready. Failed upstream calls leave reservations held for operator review.
 
 ## Deferred
 

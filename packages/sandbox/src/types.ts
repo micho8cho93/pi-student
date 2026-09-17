@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { SandboxConfig } from "@pi-student/contracts";
 
 export const SANDBOX_WORKSPACE = "/workspace";
 
@@ -23,6 +24,9 @@ export interface SandboxFileStat {
 }
 
 export interface SandboxRuntime {
+	readonly mode?: SandboxMode;
+	/** Providers must reject profiles they cannot faithfully enforce. */
+	configure?(configuration: SandboxConfig): Promise<void>;
 	setInternetAllowed?(allowed: boolean): void;
 	start(projectPath: string): Promise<void>;
 	stop(): Promise<void>;

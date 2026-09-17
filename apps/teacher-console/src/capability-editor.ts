@@ -33,10 +33,27 @@ function readCapabilityEditor(){
  for(const key of Object.keys(settings.limits)){const raw=el('cap-limit-'+key).value;settings.limits[key]=raw===''?null:Number(raw);}
  return settings;
 }
+function restrictCapabilityEditor(paths){
+ const allowed=new Set(paths),root=el('project-capabilities');
+ root.prepend(node('p',{class:'muted full'},'Your institution delegates only the controls shown below. Other settings are inherited from its policy.'));
+ for(const [key] of capabilityFields){const input=el('cap-'+key);if(input)input.closest('label').style.display=allowed.has(key)?'':'none'}
+ for(const [key] of accessibilityFields){const input=el('cap-access-'+key);if(input)input.closest('label').style.display=allowed.has('accessibility.'+key)?'':'none'}
+ for(const key of ['minutes','turns','tokens','cost']){const input=el('cap-limit-'+key);if(input)input.closest('label').style.display=allowed.has('limits.'+key)?'':'none'}
+ const models=el('cap-models');if(models)models.closest('label').style.display=allowed.has('models')?'':'none';
+ const reasoning=el('cap-level-off');if(reasoning)reasoning.closest('fieldset').style.display=allowed.has('reasoningLevels')?'':'none';
+}
+function delegatedCapabilityPatch(settings,paths){
+ const patch={};
+ for(const path of paths){const parts=path.split('.');let value=parts.length===1?settings[parts[0]]:settings[parts[0]]?.[parts[1]];
+  if(value===undefined||(path==='models'&&!value.length))continue;
+  if(parts.length===1)patch[path]=value;else{patch[parts[0]]||={};patch[parts[0]][parts[1]]=value;}}
+ return patch;
+}
 function policyHistoryNode(session){
  if(!session.effective_policy)return node('span',{},'Project policy: not recorded (older session)');
  const policy=session.effective_policy;const details=node('details',{},node('summary',{},'Project policy · version '+policy.version));
  details.append(node('pre',{style:'white-space:pre-wrap;overflow-wrap:anywhere'},JSON.stringify(policy.settings,null,2)));
+ if(policy.provenance)details.append(node('pre',{style:'white-space:pre-wrap;overflow-wrap:anywhere'},JSON.stringify({sourceVersions:policy.sourceVersions,provenance:policy.provenance},null,2)));
  const blocked=session.policy_compliance&&session.policy_compliance.blockedActions||{};
  details.append(node('p',{},'Runtime-reported blocked actions: '+(Object.entries(blocked).map(([key,count])=>key+': '+count).join(', ')||'none recorded')));return details;
 }

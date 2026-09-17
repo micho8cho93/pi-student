@@ -24,6 +24,7 @@ export interface StudentRuntimeServices {
 	modelAdmission?: ModelAdmissionProvider;
 	classroom?: ClassroomRuntimeServices;
 	contextStore?: TeacherContextStore;
+	configureEnvironment?: (projectId?: string) => Promise<void>;
 	recordStore?: LearningRecordStore;
 }
 
@@ -56,6 +57,7 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			catch { ctx.ui.notify("Could not save or sync the learning record. Use /sync to retry.", "warning"); }
 		};
 		const startRecord = async (context: TeacherContext, ctx: ExtensionContext) => {
+			await services.configureEnvironment?.(context.projectId);
 			let studentId: string | undefined;
 			try { studentId = (await identityProvider.getIdentity()).userId; }
 			catch { /* Offline recording remains available. */ }

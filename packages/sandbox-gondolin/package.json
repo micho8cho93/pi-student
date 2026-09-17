@@ -10,6 +10,7 @@
     "test": "vitest run --root ../.. packages/sandbox-gondolin/test"
   },
   "dependencies": {
+    "@pi-student/contracts": "*",
     "@earendil-works/gondolin": "^0.12.0",
     "@pi-student/sandbox": "*",
     "@pi-student/shared": "*"

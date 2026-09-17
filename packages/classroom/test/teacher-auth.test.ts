@@ -15,6 +15,5 @@ describe("teacher authentication flow", () => {
 	it("turns common Supabase auth failures into actionable guidance", () => {
 		expect(describeAuthError(new Error("provider is not enabled"))).toContain("Enable Google");
 		expect(describeAuthError(new Error("redirect_to is not allowed"))).toContain("/auth/callback");
-		expect(describeAuthError(new Error("over_email_send_rate_limit"))).toContain("Verify code");
 	});
 });

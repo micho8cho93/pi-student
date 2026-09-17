@@ -137,23 +137,12 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 		process.stdout.write("Signed out of the classroom service.\n");
 		return true;
 	}
-	if (action === "verify" && rest[0] === "email") {
-		const email = rest[1];
-		const token = rest[2];
-		if (!email || !token) throw new Error("Usage: pi-student auth verify email <address> <6-digit-code>");
-		const { error } = await client.auth.verifyOtp({ email, token, type: "email" });
-		if (error) throw error;
-		process.stdout.write("Email code verified. Signed in to the classroom service.\n");
-		return true;
-	}
 	if (action === "login") {
-		const method = rest[0] === "google" ? "google" : "email";
-		const email = method === "email" ? (rest[0] === "email" ? rest[1] : rest[0]) : undefined;
-		if (method === "email" && !email) throw new Error("Usage: pi-student auth login email teacher@example.edu");
-		await authenticateInBrowser(client, method, email);
+		if (rest[0] !== "google" || rest.length !== 1) throw new Error("Usage: pi-student teacher auth login google");
+		await authenticateInBrowser(client);
 		return true;
 	}
-	throw new Error("Usage: pi-student auth [login email <address>|login google|verify email <address> <code>|status|logout]");
+	throw new Error("Usage: pi-student teacher auth [login google|status|logout]");
 }
 
 async function runTeacherClassCommand(args: string[]): Promise<boolean> {
@@ -267,6 +256,6 @@ async function runTeacherProjectCommand(args: string[]): Promise<boolean> {
 
 async function requireSignedIn(client: SupabaseClient) {
 	const { data, error } = await client.auth.getUser();
-	if (error || !data.user) throw error ?? new Error("Sign in first with pi-student teacher auth login google or pi-student teacher auth login email <address>.");
+	if (error || !data.user) throw error ?? new Error("Sign in first with pi-student teacher auth login google.");
 	return data.user;
 }

@@ -7,7 +7,7 @@ import type { TeacherContextStore } from "@pi-student/telemetry/local-store";
 import { redactSecrets } from "./ui.js";
 
 export interface ClassroomAuthenticator {
-	signIn(method: "email" | "google", email?: string, notify?: (message: string) => void): Promise<void>;
+	signIn(notify?: (message: string) => void): Promise<void>;
 }
 
 export interface ClassroomRuntimeServices {
@@ -23,11 +23,9 @@ export function createStudentClassroomExtension(services: ClassroomRuntimeServic
 		let selectedContext: TeacherContext = {};
 		const signedIn = async (ctx: ExtensionContext): Promise<boolean> => {
 			if ((await services.identityProvider.getIdentity()).userId) return true;
-			const method = await ctx.ui.select("Sign in to your class", ["Google", "Email", "Cancel"]);
-			if (!method || method === "Cancel") return false;
-			const email = method === "Email" ? await ctx.ui.input("School email address") : undefined;
-			if (method === "Email" && !email?.trim()) return false;
-			await services.authenticator.signIn(method === "Google" ? "google" : "email", email?.trim(), message => ctx.ui.notify(message, "info"));
+			const method = await ctx.ui.select("Sign in to your class", ["Continue with Google", "Cancel"]);
+			if (method !== "Continue with Google") return false;
+			await services.authenticator.signIn(message => ctx.ui.notify(message, "info"));
 			if (!(await services.identityProvider.getIdentity()).userId) throw new Error("Sign-in could not be verified. Try /join-class again.");
 			return true;
 		};

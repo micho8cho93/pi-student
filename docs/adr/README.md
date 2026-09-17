@@ -11,3 +11,6 @@
 - [0009 — Administrative audit logging](0009-administrative-audit-logging.md)
 - [0010 — Effective policy resolution](0010-effective-policy-resolution.md)
 - [0011 — Organization usage metering](0011-organization-usage-metering.md)
+- [0012 — Provider-neutral sandbox profiles](0012-sandbox-profile-abstraction.md)
+- [0013 — Managed dataset artifacts](0013-managed-datasets.md)
+- [0014 — Organization extensions trust and permissions](0014-organization-extensions-trust.md)

@@ -10,6 +10,7 @@ create table public.model_profiles (
   fallback_profile_id uuid references public.model_profiles(id) on delete set null,
   version integer not null default 1,
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   unique (organization_id, id),
   check (array_length(allowed_thinking_levels, 1) between 1 and 7),
   check (allowed_thinking_levels <@ array['off','minimal','low','medium','high','xhigh','max']::text[])
@@ -35,6 +36,19 @@ create unique index governance_policy_org_unique on public.governance_policies(o
 create unique index governance_policy_class_unique on public.governance_policies(class_id) where scope = 'class';
 create unique index governance_policy_project_unique on public.governance_policies(project_id) where scope = 'project';
 create index governance_policies_org_idx on public.governance_policies(organization_id, scope);
+
+-- Managed project capability edits must pass through delegated governance RPC.
+create function private.reject_direct_managed_capability_update() returns trigger language plpgsql set search_path = '' as $$
+begin
+  if new.capability_policy is distinct from old.capability_policy and exists (
+    select 1 from public.classes c where c.id=new.class_id and c.organization_id is not null
+  ) then raise exception 'Use delegated governance policy for managed projects' using errcode='42501'; end if;
+  return new;
+end;
+$$;
+revoke all on function private.reject_direct_managed_capability_update() from public, anon, authenticated;
+create trigger reject_direct_managed_capability_update before update of capability_policy on public.projects
+  for each row execute function private.reject_direct_managed_capability_update();
 
 create table public.model_prices (
   id uuid primary key default gen_random_uuid(),
@@ -95,7 +109,7 @@ create table public.usage_ledger (
   estimated_cost_micros bigint check (estimated_cost_micros >= 0),
   pricing_version text,
   recorded_at timestamptz not null default now(),
-  source text not null default 'client_reported' check (source in ('client_reported','gateway')),
+  source text not null default 'gateway' check (source = 'gateway'),
   check ((estimated_cost_micros is null) = (pricing_version is null))
 );
 create index usage_ledger_org_day_idx on public.usage_ledger(organization_id, recorded_at desc);
@@ -239,12 +253,7 @@ begin
     'imageUploads','fileUploads','reflection','models','reasoningLevels','limits.minutes','limits.turns','limits.tokens','limits.cost',
     'accessibility.dictation','accessibility.cloudDictation','accessibility.readAloud','accessibility.simplifiedVocabulary','accessibility.readableFormatting']::text[]) then
     raise exception 'Invalid delegated path' using errcode='22023'; end if;
-  -- Teachers may only configure delegated paths, and cannot delegate further.
-  if not private.can_administer_organization(organization_id_input) then
-    if delegated_paths_input <> '{}'::text[] or exists (
-      select 1 from jsonb_object_keys(settings_input) k where k not in ('reasoningLevels','models','reflection','accessibility','limits')
-    ) then raise exception 'Teacher setting is not delegated' using errcode='42501'; end if;
-  end if;
+  -- Teachers may configure only paths explicitly delegated above; no further delegation.
   select id into existing_id from public.governance_policies where organization_id=organization_id_input and scope=scope_input
     and ((scope_input='organization') or (scope_input='class' and class_id=class_id_input) or (scope_input='project' and project_id=project_id_input));
   if existing_id is null then
@@ -354,43 +363,23 @@ $$;
 revoke all on function public.platform_usage_summary() from public, anon;
 grant execute on function public.platform_usage_summary() to authenticated;
 
--- Authenticated records are explicitly marked client-reported. This is an
--- idempotent event stream, never a source of authoritative provider billing.
-create function public.record_reported_model_usage(event_id_input uuid, project_id_input uuid, session_id_input uuid,
-  provider_input text, model_input text, input_tokens_input bigint, output_tokens_input bigint,
-  cache_read_tokens_input bigint default 0, cache_write_tokens_input bigint default 0)
-returns void language plpgsql security definer set search_path = '' as $$
-declare context_row record; profile_row record; price_row record; estimated bigint;
+-- Exact organization totals, independent of dashboard row pagination.
+create function public.organization_usage_totals(organization_id_input uuid, from_day_input date)
+returns jsonb language plpgsql stable security definer set search_path = '' as $$
+declare result jsonb;
 begin
-  if auth.uid() is null then raise exception 'Authentication required' using errcode='42501'; end if;
-  if input_tokens_input < 0 or output_tokens_input < 0 or cache_read_tokens_input < 0 or cache_write_tokens_input < 0 or
-    greatest(input_tokens_input,output_tokens_input,cache_read_tokens_input,cache_write_tokens_input) > 100000000 then
-    raise exception 'Invalid usage' using errcode='22023'; end if;
-  select p.class_id,c.organization_id into context_row from public.projects p join public.classes c on c.id=p.class_id where p.id=project_id_input;
-  if context_row.organization_id is null or not private.is_active_class_member(context_row.class_id) or
-    not exists (select 1 from public.class_members cm where cm.class_id=context_row.class_id and cm.user_id=auth.uid() and cm.role='student' and cm.status='active') then
-    raise exception 'Managed student project required' using errcode='42501'; end if;
-  select * into profile_row from public.model_profiles m where m.organization_id=context_row.organization_id and
-    provider_input='institution' and m.id::text=model_input and m.available;
-  if profile_row.id is null or not private.has_organization_entitlement(context_row.organization_id,'model_governance') then
-    raise exception 'Model is not approved' using errcode='42501'; end if;
-  select * into price_row from public.model_prices mp where mp.profile_id=profile_row.id and mp.effective_from <= now()
-    order by mp.effective_from desc limit 1;
-  if price_row.id is not null then
-    estimated := ceil((input_tokens_input::numeric * price_row.input_micros_per_million +
-      output_tokens_input::numeric * price_row.output_micros_per_million +
-      cache_read_tokens_input::numeric * price_row.cache_read_micros_per_million +
-      cache_write_tokens_input::numeric * price_row.cache_write_micros_per_million) / 1000000)::bigint;
-  end if;
-  insert into public.usage_ledger(id,organization_id,class_id,user_id,project_id,session_id,model_profile_id,provider,provider_model,
-    input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,estimated_cost_micros,pricing_version,source)
-    values(event_id_input,context_row.organization_id,context_row.class_id,auth.uid(),project_id_input,session_id_input,
-      profile_row.id,profile_row.provider,profile_row.provider_model,input_tokens_input,output_tokens_input,
-      cache_read_tokens_input,cache_write_tokens_input,estimated,price_row.price_version,'client_reported')
-    on conflict (id) do nothing;
+  if not private.can_administer_organization(organization_id_input) or
+    not private.has_organization_entitlement(organization_id_input,'usage_dashboard') then
+    raise exception 'Usage dashboard access required' using errcode='42501'; end if;
+  select jsonb_build_object('tokens',coalesce(sum(d.input_tokens+d.output_tokens+d.cache_read_tokens+d.cache_write_tokens),0),
+    'knownCostMicros',coalesce(sum(d.known_cost_micros),0),'unknownCostCount',coalesce(sum(d.unknown_cost_count),0))
+    into result from public.usage_daily d where d.organization_id=organization_id_input
+      and (from_day_input is null or d.usage_day >= from_day_input);
+  return result;
 end;
 $$;
-revoke all on function public.record_reported_model_usage(uuid,uuid,uuid,text,text,bigint,bigint,bigint,bigint) from public, anon, authenticated;
+revoke all on function public.organization_usage_totals(uuid,date) from public, anon;
+grant execute on function public.organization_usage_totals(uuid,date) to authenticated;
 
 create function private.aggregate_usage_ledger() returns trigger language plpgsql security definer set search_path = '' as $$
 declare class_teacher uuid;
@@ -470,7 +459,7 @@ revoke all on public.model_request_reservations from public, anon, authenticated
 create function public.gateway_reserve_model_request(user_id_input uuid, project_id_input uuid, profile_id_input uuid,
   thinking_level_input text, input_bound_input bigint, output_bound_input bigint)
 returns jsonb language plpgsql security definer set search_path = '' as $$
-declare c record; m record; price record; b record; used_cost bigint; used_tokens bigint; held_cost bigint; held_tokens bigint;
+declare c record; m public.model_profiles%rowtype; price public.model_prices%rowtype; b record; used_cost bigint; used_tokens bigint; unknown_count bigint; held_cost bigint; held_tokens bigint;
   reserve_cost bigint; reserve_tokens bigint; reservation_id uuid; warning boolean := false; predicted numeric;
 begin
   if input_bound_input < 1 or input_bound_input > 32000 or output_bound_input < 1 or output_bound_input > 4096 then
@@ -498,11 +487,14 @@ begin
       (scope='model' and model_profile_id=profile_id_input)) loop
     if b.monthly_cost_limit_micros is not null and price.id is null then
       return jsonb_build_object('allowed',false,'warning',true,'action',b.hard_action,'reason','price_unknown'); end if;
-    select coalesce(sum(d.known_cost_micros),0),coalesce(sum(d.input_tokens+d.output_tokens+d.cache_read_tokens+d.cache_write_tokens),0)
-      into used_cost,used_tokens from public.usage_daily d where d.organization_id=c.organization_id
+    select coalesce(sum(d.known_cost_micros),0),coalesce(sum(d.input_tokens+d.output_tokens+d.cache_read_tokens+d.cache_write_tokens),0),
+      coalesce(sum(d.unknown_cost_count),0)
+      into used_cost,used_tokens,unknown_count from public.usage_daily d where d.organization_id=c.organization_id
       and d.usage_day>=date_trunc('month',now() at time zone 'UTC')::date and
       (b.scope='organization' or (b.scope='class' and d.class_id=c.class_id) or
         (b.scope='user' and d.user_id=user_id_input) or (b.scope='model' and d.model_profile_id=profile_id_input));
+    if b.monthly_cost_limit_micros is not null and unknown_count > 0 then
+      return jsonb_build_object('allowed',false,'warning',true,'action',b.hard_action,'reason','prior_cost_unknown'); end if;
     select coalesce(sum(r.reserved_cost_micros),0),coalesce(sum(r.reserved_tokens),0)
       into held_cost,held_tokens from public.model_request_reservations r where r.organization_id=c.organization_id
       and r.status='reserved' and r.created_at>=date_trunc('month',now() at time zone 'UTC') and
@@ -528,7 +520,7 @@ grant execute on function public.gateway_reserve_model_request(uuid,uuid,uuid,te
 create function public.gateway_settle_model_request(reservation_id_input uuid, session_id_input uuid,
   input_tokens_input bigint, output_tokens_input bigint, cache_read_tokens_input bigint, cache_write_tokens_input bigint)
 returns void language plpgsql security definer set search_path = '' as $$
-declare r record; price record; cost bigint; total_tokens bigint;
+declare r public.model_request_reservations%rowtype; price public.model_prices%rowtype; cost bigint; total_tokens bigint;
 begin
   select * into r from public.model_request_reservations where id=reservation_id_input;
   if r.id is null then raise exception 'Reservation not found' using errcode='22023'; end if;

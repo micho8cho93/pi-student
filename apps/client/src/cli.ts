@@ -20,7 +20,7 @@ import { runRepair } from "./install/repair.js";
 import { appendDiagnosticLog } from "./install/logging.js";
 import { createLearningSession } from "@pi-student/education/types";
 import { WorkflowController } from "@pi-student/education/workflow-controller";
-import { authenticateInBrowser, createPiSupabaseClient, readSupabaseConfig, saveSupabaseConfig, SupabaseClassroomRepository, SupabaseGovernancePolicyProvider, SupabaseIdentityProvider, SupabaseModelAdmissionProvider, SupabaseTelemetrySink } from "@pi-student/supabase-adapter";
+import { authenticateInBrowser, createPiSupabaseClient, readSupabaseConfig, saveSupabaseConfig, SupabaseClassroomRepository, SupabaseGovernancePolicyProvider, SupabaseIdentityProvider, SupabaseInstitutionalEnvironmentProvider, SupabaseModelAdmissionProvider, SupabaseTelemetrySink } from "@pi-student/supabase-adapter";
 import { launchPaseoGui } from "@pi-student/paseo-adapter/launcher";
 import { createStartupCueLoader } from "@pi-student/runtime/progress";
 import { disablePiStudentSlashCommands, isDisabledStudentSlashCommand } from "./terminal/slash-commands.js";
@@ -83,14 +83,14 @@ async function main(): Promise<void> {
 			"       pi-student github [connect|status|repositories]",
 			"       pi-student deployments",
 			"       pi-student terminal --unsafe-no-sandbox",
-			"       pi-student auth login [email <address>|google]",
-			"       pi-student auth [verify email <address> <code>|status|logout]",
+			"       pi-student auth login google",
+			"       pi-student auth [status|logout]",
 			"       pi-student class [join <code>|list|select <class-id>]",
 			"       pi-student project [list|select <project-id>]",
 			"       pi-student sync",
 			"       pi-student teacher [tui] [--port <number>]",
 			"       pi-student teacher web [--port <number>]",
-			"       pi-student teacher auth login [email <address>|google]",
+			"       pi-student teacher auth login google",
 			"       pi-student teacher class [create <name>|list|members <id>|approve <membership-id>|reject <membership-id>|regenerate <id>|pause <id>|resume <id>]",
 			"       pi-student teacher project [list <class-id>|create <class-id> <name>|requirement <project-id> <title>|standard <class-id> <project-id> <code> [title]]",
 			"",
@@ -310,16 +310,17 @@ async function createApplicationRuntime(projectPath: string) {
 		modelProvider,
 		sandboxProvider: new GondolinSandboxProvider(),
 		identityProvider,
+		environmentProvider: new SupabaseInstitutionalEnvironmentProvider(client),
 		policyProvider: new SupabaseGovernancePolicyProvider(client, new StoredPolicyProvider(() => contextStore.read()), gatewayUrl ? {
 			url: gatewayUrl, configure: (projectId, url, profiles, token) => modelProvider.configureHostedProfiles(projectId, url, profiles, token),
 		} : undefined),
-		modelAdmission: new SupabaseModelAdmissionProvider(client, (token, sessionId) => modelProvider.refreshHostedToken(token, sessionId)),
+		modelAdmission: new SupabaseModelAdmissionProvider(client, (token, sessionId, thinkingLevel) => modelProvider.refreshHostedToken(token, sessionId, thinkingLevel)),
 		telemetrySink: new SupabaseTelemetrySink(client),
 		classroom: {
 			repository: new SupabaseClassroomRepository(client),
 			identityProvider,
 			contextStore,
-			authenticator: { signIn: (method, email, notify) => authenticateInBrowser(client, method, email, notify) },
+			authenticator: { signIn: notify => authenticateInBrowser(client, notify) },
 		},
 	});
 }

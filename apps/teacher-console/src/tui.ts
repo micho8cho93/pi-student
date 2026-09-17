@@ -50,7 +50,7 @@ export async function runTeacherTui(config: SupabaseConfig, options: TeacherTuiO
 
 	try {
 		const { data, error } = await client.auth.getUser();
-		if (error || !data.user) throw new Error(describeAuthError(error ?? new Error("Not signed in.")) + " Sign in with `pi-student teacher auth login google` or the email login command, then try again.");
+		if (error || !data.user) throw new Error(describeAuthError(error ?? new Error("Not signed in.")) + " Sign in with `pi-student teacher auth login google`, then try again.");
 		write(`${theme.dim(`Signed in as ${data.user.email ?? data.user.id}`)}\n`);
 		let running = true;
 		while (running) {

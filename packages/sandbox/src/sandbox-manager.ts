@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { SandboxConfig } from "@pi-student/contracts";
 import { Type, type Static } from "typebox";
 import {
 	createBashTool,
@@ -26,9 +27,22 @@ export interface SandboxProvider {
 export class SandboxManager {
 	readonly runtime: SandboxRuntime;
 	private projectPath?: string;
+	private configuration?: SandboxConfig;
 
 	constructor(private readonly initialProjectPath?: string, options: SandboxManagerOptions = {}) {
 		this.runtime = options.runtime ?? options.provider?.create(options.mode ?? readSandboxMode()) ?? missingSandboxProvider();
+	}
+
+	async configure(configuration: SandboxConfig): Promise<void> {
+		if (configuration.profile && configuration.mode === "host") throw new Error("Managed environments cannot run on the host.");
+		if (this.runtime.mode && this.runtime.mode !== configuration.mode) throw new Error("Sandbox provider mode does not match the resolved environment.");
+		if (this.runtime.isRunning() && JSON.stringify(this.configuration) === JSON.stringify(configuration)) return;
+		const wasRunning = this.runtime.isRunning();
+		if (this.runtime.configure) await this.runtime.configure(configuration);
+		else if (configuration.profile) throw new Error("Sandbox provider cannot enforce this profile.");
+		else if (wasRunning) await this.runtime.stop();
+		this.configuration = configuration;
+		if (wasRunning && this.projectPath) await this.runtime.start(this.projectPath);
 	}
 
 	async start(projectPath = this.initialProjectPath ?? process.cwd()): Promise<void> {

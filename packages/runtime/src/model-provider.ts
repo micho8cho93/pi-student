@@ -19,12 +19,13 @@ export class DirectModelProvider implements StudentModelProvider {
 		this.hosted = { projectId, url: endpoint.toString().replace(/\/$/, ""), profiles };
 		this.refreshHostedToken(studentToken);
 	}
-	refreshHostedToken(studentToken: string, sessionId?: string): void {
+	refreshHostedToken(studentToken: string, sessionId?: string, thinkingLevel?: string): void {
 		if (!this.hosted || !studentToken) throw new Error("Institution models are not configured.");
 		const { projectId, url, profiles } = this.hosted;
 		this.runtime.registerProvider("institution", {
 			name: "Institution models", api: "openai-completions", baseUrl: `${url}/projects/${encodeURIComponent(projectId)}/v1`,
-			apiKey: studentToken, authHeader: true, ...(sessionId ? { headers: { "X-Pi-Session-Id": sessionId } } : {}),
+			apiKey: studentToken, authHeader: true,
+			headers: { ...(sessionId ? { "X-Pi-Session-Id": sessionId } : {}), ...(thinkingLevel ? { "X-Pi-Thinking-Level": thinkingLevel } : {}) },
 			models: profiles.filter(profile => profile.available).map(profile => ({
 				id: profile.id, name: profile.displayName, api: "openai-completions", reasoning: profile.allowedThinkingLevels.some(level => level !== "off"),
 				input: ["text"] as ("text")[], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

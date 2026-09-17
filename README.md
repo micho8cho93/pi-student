@@ -392,7 +392,7 @@ pi-student teacher project list <class-id>
 Students can open Pi Student and code independently before joining a class.
 Inside the interactive terminal:
 
-- `/join-class` asks for the teacher's code and offers Google or email sign-in if needed. Active memberships open the project picker; pending requests explain that teacher approval is required.
+- `/join-class` asks for the teacher's code and uses Google sign-in if needed. Active memberships open the project picker; pending requests explain that teacher approval is required.
 - `/projects` lists the student's approved classes and their projects, newest first. It works before the first prompt or between responses. The selected assignment and requirements become available to the agent in the current workspace.
 - `/sync` saves the current record and retries uploads. The terminal shows whether classroom sync succeeded or is pending.
 
@@ -423,8 +423,7 @@ shows all projects without inventing completed/upcoming labels.
 The existing shell commands also remain available:
 
 ```bash
-pi-student auth login email student@example.edu
-# Google is also supported: pi-student auth login google
+pi-student auth login google
 pi-student class join ABC-234
 pi-student project list
 pi-student project select <project-id> --requirements <id,id>

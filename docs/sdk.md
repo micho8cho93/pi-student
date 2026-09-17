@@ -12,7 +12,7 @@
 
 - It is not a second implementation of runtime, classroom, telemetry, or publishing behavior.
 - It is not a service locator and does not create Supabase, Gondolin, GitHub, or Paseo automatically.
-- It does not define organizations, billing, LMS integration, cloud sandboxes, or a model gateway.
+- It does not implement organization administration, billing collection, LMS integration, or cloud sandboxes. Institution governance enters through contracts and adapters; the gateway is a separate service.
 
 ## Public entry points
 
@@ -48,6 +48,6 @@ await runtime.start();
 
 Concrete adapters remain explicit: `@pi-student/sandbox-gondolin`, `@pi-student/supabase-adapter`, `@pi-student/paseo-adapter`, and the GitHub classes in `@pi-student/publishing`.
 
-## Future organization control plane
+## Organization control plane
 
-A control-plane client would authenticate the user, fetch effective institution configuration, and expose it through the provider contracts. Its policy implementation may perform future inheritance; its model implementation may resolve institution-hosted models; and its telemetry implementation may enqueue remote events. It then constructs a normal `RuntimeConfiguration`. Organization IDs and admin rules stay outside the learning engine until translated into those runtime-facing values.
+The Supabase governance adapter authenticates the user, fetches institution policy layers and approved model profiles, and resolves one `EffectivePolicy` before entering the learning runtime. Institution models use the gateway through the `ModelProvider` boundary. Gateway-owned database RPCs reserve and settle usage. Organization IDs and admin rules stay outside the learning engine until translated into runtime-facing values.

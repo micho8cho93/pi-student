@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { SandboxConfig } from "@pi-student/contracts";
 import os from "node:os";
 import { constants as fsConstants } from "node:fs";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
@@ -30,8 +31,21 @@ const GUEST_ENV: Record<string, string> = {
 export const SANDBOX_ENV_ALLOWLIST = new Set(["CI", "LANG", "LC_ALL", "NODE_ENV", "TERM", "TZ"]);
 
 export class GondolinRuntime implements SandboxRuntime {
+	readonly mode = "gondolin" as const;
 	private internetAllowed = true;
-	setInternetAllowed(allowed: boolean): void { this.internetAllowed = allowed; }
+	private maxInternetAllowed = true;
+	async configure(configuration: SandboxConfig): Promise<void> {
+		if (configuration.mode !== "gondolin") throw new SandboxRuntimeError("Managed configuration requires Gondolin", "gondolin");
+		if (configuration.profile) {
+			// The packaged image has no verified image builder or isolated dataset mount
+			// adapter yet. Never pretend that packages, quotas or mounts took effect.
+			throw new SandboxRuntimeError("This Gondolin deployment cannot enforce managed profiles; a verified image and dataset provider is required", "gondolin");
+		}
+		if (this.isRunning()) await this.stop();
+		this.maxInternetAllowed = configuration.internetAllowed ?? true;
+		this.internetAllowed = this.maxInternetAllowed;
+	}
+	setInternetAllowed(allowed: boolean): void { this.internetAllowed = allowed && this.maxInternetAllowed; }
 	private vm?: VM;
 	private projectPath?: string;
 	private starting?: Promise<void>;
