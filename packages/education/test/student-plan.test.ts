@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addStudentPlanStep, approveStudentPlan, createStudentPlan, planProgress } from "@pi-student/education/student-plan";
+import { addStudentPlanStep, approveStudentPlan, createStudentPlan, hasStudentAuthoredSteps, planProgress } from "@pi-student/education/student-plan";
 
 describe("StudentPlan", () => {
 	it("records student-authored steps and requires explicit acknowledgement", () => {
@@ -14,6 +14,14 @@ describe("StudentPlan", () => {
 		expect(plan.approved).toBe(true);
 		expect(plan.studentAcknowledgements).toHaveLength(1);
 		expect(() => addStudentPlanStep(plan, "Silently add persistence")).toThrow("approved student plan");
+	});
+
+	it("does not treat non-student steps as approval evidence", () => {
+		const plan = createStudentPlan();
+		plan.steps.push({ id: "model-step", description: "Model-only step", status: "pending", studentAuthored: false });
+
+		expect(hasStudentAuthoredSteps(plan)).toBe(false);
+		expect(() => approveStudentPlan(plan, "I approve this plan.")).toThrow("student-authored step");
 	});
 
 	it("reports checklist progress", () => {

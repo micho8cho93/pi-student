@@ -132,13 +132,18 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			bus.emit({ type: workflow.getStage() === "plan" ? "AGENT_HINT_GIVEN" : "AGENT_EXPLANATION_GIVEN" });
 		});
 
-		pi.on("tool_call", async (event) => {
+		pi.on("tool_call", async (event, ctx) => {
+			bus.emit({ type: "TOOL_ATTEMPTED", toolName: event.toolName, stage: workflow.getStage(), provider: ctx.model?.provider, model: ctx.model?.id });
 			if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
 				existedBefore.set(event.toolCallId, await sandbox.fileExists(event.input.path).catch(() => true));
 			}
 		});
-		pi.on("tool_result", async (event) => {
-			if (event.isError) return;
+		pi.on("tool_result", async (event, ctx) => {
+			if (event.isError) {
+				const details = event.details && typeof event.details === "object" ? event.details as Record<string, unknown> : undefined;
+				bus.emit({ type: "TOOL_FAILED", toolName: event.toolName, stage: workflow.getStage(), code: typeof details?.code === "string" ? details.code : undefined, provider: ctx.model?.provider, model: ctx.model?.id });
+				return;
+			}
 			if (event.toolName === "write" || event.toolName === "edit") {
 				bus.emit({ type: existedBefore.get(event.toolCallId) ? "FILE_MODIFIED" : "FILE_CREATED" });
 				bus.emit({ type: "AGENT_IMPLEMENTATION_GIVEN" });

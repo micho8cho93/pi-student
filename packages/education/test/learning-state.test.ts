@@ -80,7 +80,23 @@ describe("learning_state extension", () => {
 		});
 
 		expect(response).toHaveProperty("isError", true);
+		expect(response.details).toMatchObject({ code: "LEARNING_STATE_REJECTED", nextAction: expect.stringContaining("understandingReady") });
 		expect(controller.getStage()).toBe("understand");
 		expect(controller.state.goal).toBeUndefined();
+	});
+
+	it("rejects model-reported plan approval with a recoverable instruction", async () => {
+		const controller = new WorkflowController(createLearningSession("/tmp/project"));
+		const tool = registerLearningStateTool(controller);
+		const response = await execute(tool, {
+			currentStage: "understand",
+			readyForNextStage: false,
+			studentApprovedPlan: true,
+			reason: "The model approved the plan",
+		});
+
+		expect(response).toHaveProperty("isError", true);
+		expect(response.details).toMatchObject({ code: "LEARNING_STATE_REJECTED", nextAction: expect.stringContaining("understandingReady") });
+		expect(controller.getStage()).toBe("understand");
 	});
 });

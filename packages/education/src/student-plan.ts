@@ -42,9 +42,13 @@ export function addStudentPlanStep(plan: StudentPlan, description: string): Plan
 	return step;
 }
 
+export function hasStudentAuthoredSteps(plan: StudentPlan): boolean {
+	return plan.steps.some((step) => step.studentAuthored && step.description.trim().length > 0);
+}
+
 export function approveStudentPlan(plan: StudentPlan, acknowledgement: string): void {
 	const normalized = acknowledgement.trim();
-	if (plan.steps.length === 0) throw new Error("A student plan needs at least one step before approval");
+	if (!hasStudentAuthoredSteps(plan)) throw new Error("A student plan needs at least one student-authored step before approval");
 	if (!normalized) throw new Error("Plan approval requires a student acknowledgement");
 
 	plan.approved = true;

@@ -12,6 +12,8 @@ export type LearningEvent =
 	| (BaseEvent & { type: "SESSION_GOAL_CHANGED"; goal: string })
 	| (BaseEvent & { type: "MODEL_SELECTED" | "MODEL_CHANGED"; provider: string; model: string })
 	| (BaseEvent & { type: "THINKING_LEVEL_CHANGED"; level: string })
+	| (BaseEvent & { type: "TOOL_ATTEMPTED"; toolName: string; stage: string; provider?: string; model?: string })
+	| (BaseEvent & { type: "TOOL_FAILED"; toolName: string; stage: string; code?: string; provider?: string; model?: string })
 	| (BaseEvent & { type: "AGENT_TURN_COMPLETED"; inputTokens?: number; outputTokens?: number; totalTokens?: number })
 	| (BaseEvent & { type: "FILE_CREATED" | "FILE_MODIFIED" | "FILE_DELETED" })
 	| (BaseEvent & { type: "TEST_EXECUTED" })
@@ -37,4 +39,3 @@ export class LearningEventBus {
 		return () => this.listeners.delete(listener);
 	}
 }
-

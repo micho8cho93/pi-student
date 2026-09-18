@@ -31,4 +31,41 @@ describe("student question interface boundary", () => {
 			],
 		});
 	});
+
+	it("re-prompts for a blank required answer without returning a tool error", async () => {
+		let tool: RegisteredTool | undefined;
+		const pi = {
+			on: vi.fn(),
+			registerTool(value: RegisteredTool) { tool = value; },
+		} as unknown as ExtensionAPI;
+		createStudentAskExtension()(pi);
+		const input = vi.fn()
+			.mockResolvedValueOnce("   ")
+			.mockResolvedValueOnce("Keep the existing API");
+
+		const response = await tool!.execute("ask-2", {
+			questions: [{ id: "constraint", prompt: "What must remain unchanged?", category: "requirements", required: true }],
+		} as never, undefined, undefined, { ui: { input } } as never);
+
+		expect(input).toHaveBeenCalledTimes(2);
+		expect(input.mock.calls[1]?.[0]).toContain("A response is required to continue");
+		expect(response).not.toHaveProperty("isError", true);
+		expect(response.details).toMatchObject({ answers: [{ answer: "Keep the existing API" }] });
+	});
+
+	it("treats cancellation as a normal recoverable outcome", async () => {
+		let tool: RegisteredTool | undefined;
+		const pi = {
+			on: vi.fn(),
+			registerTool(value: RegisteredTool) { tool = value; },
+		} as unknown as ExtensionAPI;
+		createStudentAskExtension()(pi);
+		const response = await tool!.execute("ask-3", {
+			questions: [{ id: "goal", prompt: "What should it do?", category: "requirements" }],
+		} as never, undefined, undefined, { ui: { input: vi.fn().mockResolvedValue(undefined) } } as never);
+
+		expect(response).not.toHaveProperty("isError", true);
+		expect(response.details).toMatchObject({ cancelled: true, recoverable: true, stopped: true });
+	});
+
 });

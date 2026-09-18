@@ -12,7 +12,7 @@ import {
 
 const QuestionCategorySchema = Type.Union(
 	QUESTION_CATEGORIES.map((category) => Type.Literal(category)) as [ReturnType<typeof Type.Literal>, ...ReturnType<typeof Type.Literal>[]],
-	{ description: "Educational category" },
+	{ description: `Educational category. Allowed values: ${QUESTION_CATEGORIES.join(", ")}` },
 );
 const QuestionSchema = Type.Object({
 	id: Type.String({ description: "Stable identifier for this question" }),
@@ -67,7 +67,7 @@ export function createStudentAskExtension(
 		pi.registerTool({
 			name: "student_ask",
 			label: "Student questions",
-			description: "Ask the student one to four structured, free-text questions about engineering decisions before proceeding.",
+			description: `Ask the student one to four structured questions. Categories must be one of: ${QUESTION_CATEGORIES.join(", ")}. Never invent category names.`,
 			promptSnippet: "Ask the student targeted engineering questions.",
 	promptGuidelines: [
 				"Use for substantive decisions, not trivial confirmations.",
@@ -79,11 +79,33 @@ export function createStudentAskExtension(
 			parameters: StudentAskParams,
 			executionMode: "sequential",
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+				const round = context.questionRound ?? 0;
+				const maxRounds = context.maxRounds ?? 3;
+				if (round >= maxRounds) {
+					return result(
+						"No further student questions are needed; continue with the available information.",
+						{ questions: [], answers: [], assessment: { sufficientInformation: false }, stopped: true, reason: "max_rounds_reached", nextAction: "Continue with the current stage." },
+					);
+				}
 				const questions = params.questions
 					? normalizeQuestions(params.questions)
 					: await loop.buildQuestions(context);
+				if (!params.questions && questions.length === 0) {
+					return result(
+						"No new student questions are available; continue with the available information.",
+						{ questions: [], answers: [], assessment: { sufficientInformation: context.informationSufficient ?? false }, stopped: true, reason: "no_new_questions", nextAction: "Continue with the current stage." },
+					);
+				}
+				const duplicatePrompts = questions.filter((question, index, all) => all.findIndex((candidate) => candidate.prompt === question.prompt) !== index);
+				const previousPrompts = new Set((context.previousQuestions ?? []).map((question) => question.prompt));
+				if (duplicatePrompts.length > 0 || questions.some((question) => previousPrompts.has(question.prompt))) {
+					return result(
+						"These questions were already asked. Continue with the current stage or ask only new questions.",
+						{ questions, code: "DUPLICATE_QUESTIONS", stopped: true, recoverable: true, nextAction: "Continue with the current stage or ask only new questions." },
+					);
+				}
 				if (questions.length < 1 || questions.length > 4) {
-					return result("student_ask requires between one and four questions.", { questions }, true);
+					return result("student_ask requires between one and four questions.", { questions, code: "INVALID_QUESTION_COUNT", nextAction: "Retry once with one to four new questions." }, true);
 				}
 
 				const answers: StudentAnswer[] = [];
@@ -91,7 +113,7 @@ export function createStudentAskExtension(
 					const title = `${question.label ?? categoryLabel(question.category)} · ${index + 1}/${questions.length}`;
 					const answer = await askQuestion(ctx, question, title);
 					if (answer === undefined) {
-						return result("The student cancelled this question round.", { questions, answers, cancelled: true }, true);
+						return result("The student cancelled this question round.", { questions, answers, cancelled: true, stopped: true, recoverable: true, nextAction: "Continue only if the available information is sufficient; otherwise ask later." });
 					}
 					answers.push({ questionId: question.id, answer });
 				}
@@ -120,7 +142,7 @@ export function normalizeQuestions(value: unknown): StudentQuestion[] {
 		if (!question || typeof question !== "object") throw new Error(`Question ${index + 1} is invalid`);
 		const candidate = question as Record<string, unknown>;
 		if (typeof candidate.id !== "string" || typeof candidate.prompt !== "string" || !isQuestionCategory(candidate.category)) {
-			throw new Error(`Question ${index + 1} has an invalid id, prompt, or category`);
+			throw new Error(`Question ${index + 1} has an invalid id, prompt, or category. category must be one of: ${QUESTION_CATEGORIES.join(", ")}`);
 		}
 		if (candidate.options !== undefined && (!Array.isArray(candidate.options) || candidate.options.some((option) => typeof option !== "string"))) {
 			throw new Error(`Question ${index + 1} has invalid options`);
@@ -143,18 +165,26 @@ async function askQuestion(
 	question: StudentQuestion,
 	title: string,
 ): Promise<string | undefined> {
-	const description = question.note ? `${question.prompt}\n\n${question.note}` : question.prompt;
+	let prompt = question.note ? `${question.prompt}\n\n${question.note}` : question.prompt;
 	if (question.options && question.options.length > 0) {
 		const customLabel = "Other — type a custom response";
 		const options = question.allowCustom ? [...question.options, customLabel] : question.options;
-		const selected = await ctx.ui.select(`${title}\n${description}`, options);
+		const selected = await ctx.ui.select(`${title}\n${prompt}`, options);
 		if (selected === undefined) return undefined;
 		if (question.allowCustom && selected === customLabel) {
-			return ctx.ui.input(`${title}\n${question.prompt}`, "Type your own response");
+			while (true) {
+				const answer = await ctx.ui.input(`${title}\n${prompt}`, "Type your own response");
+				if (answer === undefined || !question.required || answer.trim()) return answer;
+				prompt = `${question.prompt}\n\nA response is required to continue. Please enter a concrete answer.`;
+			}
 		}
 		return selected;
 	}
-	return ctx.ui.input(`${title}\n${description}`, "Type your answer");
+	while (true) {
+		const answer = await ctx.ui.input(`${title}\n${prompt}`, "Type your answer");
+		if (answer === undefined || !question.required || answer.trim()) return answer;
+		prompt = `${question.prompt}\n\nA response is required to continue. Please enter a concrete answer.`;
+	}
 }
 
 function categoryLabel(category: QuestionCategory): string {

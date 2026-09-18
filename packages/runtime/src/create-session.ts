@@ -51,7 +51,7 @@ import { createProjectCapabilitiesExtension } from "./project-capabilities.js";
 import { modelAllowed, allowedReasoningLevels } from "@pi-student/policy/capability-policy";
 
 const SANDBOX_SYSTEM_PROMPT = `
-Project files and shell commands are sandboxed. Use /workspace as the project root and never ask for or expose the host project path. Provider authentication stays on the host and is not available to project processes.
+Project files and shell commands are sandboxed. The active student project is mounted at /workspace. Use /workspace for every read, write, search, and shell command; never use the host project path, process.cwd(), or any /Users/... path. If repository context is needed, inspect /workspace directly. Never ask for or expose the host project path. Provider authentication stays on the host and is not available to project processes.
 `;
 
 export interface LearningAgentSession {
@@ -596,7 +596,7 @@ function registerStudentRuntimeGuards(pi: ExtensionAPI, workflow: WorkflowContro
 		if (projectPath && !isWorkspacePath(projectPath, ctx.cwd)) {
 			return {
 				block: true,
-				reason: `Sandbox project tools are restricted to ${ctx.cwd}; the requested path is outside the student workspace.`,
+				reason: `PATH_OUTSIDE_WORKSPACE: use ${ctx.cwd} (the sandbox workspace) instead of the requested host path.`,
 			};
 		}
 		if (!isToolCallEventType("bash", event)) return undefined;

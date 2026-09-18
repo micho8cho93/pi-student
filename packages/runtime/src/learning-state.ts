@@ -6,11 +6,17 @@ import { capabilityState } from "@pi-student/policy/capability-runtime";
 
 const LearningStageSchema = Type.Union([
 	Type.Literal("understand"),
+	Type.Literal("UNDERSTAND"),
 	Type.Literal("plan"),
+	Type.Literal("PLAN"),
 	Type.Literal("implement"),
+	Type.Literal("IMPLEMENT"),
 	Type.Literal("review"),
+	Type.Literal("REVIEW"),
 	Type.Literal("verify"),
+	Type.Literal("VERIFY"),
 	Type.Literal("reflect"),
+	Type.Literal("REFLECT"),
 ]);
 
 const LearningStateParams = Type.Object({
@@ -19,6 +25,7 @@ const LearningStateParams = Type.Object({
 	goalSummary: Type.Optional(Type.String({ description: "Concise goal established during UNDERSTAND" })),
 	understandingReady: Type.Optional(Type.Boolean({ description: "Whether the requirements and intended outcome are sufficiently understood" })),
 	planSummary: Type.Optional(Type.String({ description: "Concise summary of the student-approved implementation plan" })),
+	studentApprovedPlan: Type.Optional(Type.Boolean({ description: "Must not be true; approval is recorded only by the student_plan interaction" })),
 	requestedNextStage: Type.Optional(LearningStageSchema),
 	verificationStrategy: Type.Optional(Type.String({ description: "How the implementation will be verified" })),
 	verificationPassed: Type.Optional(Type.Boolean({ description: "Whether verification passed" })),
@@ -39,7 +46,7 @@ export function createLearningStateExtension(workflow: WorkflowController): Exte
 		pi.registerTool({
 			name: "learning_state",
 			label: "Learning stage",
-			description: "Record workflow progress and request a controller-validated transition to the next learning stage.",
+				description: "Record workflow progress. Stages are lowercase: understand, plan, implement, review, verify, reflect. Uppercase input is normalized safely.",
 			promptSnippet: "Report progress and advance the learning workflow when the current stage is complete.",
 			promptGuidelines: [
 				"Call learning_state whenever a stage becomes ready to advance; do not merely describe the transition in prose.",
@@ -52,7 +59,12 @@ export function createLearningStateExtension(workflow: WorkflowController): Exte
 			async execute(_toolCallId, params) {
 				const previousStage = workflow.getStage();
 				try {
-					workflow.updateLearningState(params as LearningStateUpdate);
+					const normalizedParams = {
+						...params,
+						currentStage: params.currentStage.toLowerCase() as LearningStateUpdate["currentStage"],
+						...(params.requestedNextStage ? { requestedNextStage: params.requestedNextStage.toLowerCase() as LearningStateUpdate["requestedNextStage"] } : {}),
+					};
+					workflow.updateLearningState(normalizedParams as LearningStateUpdate);
 					const currentStage = workflow.getStage();
 					const reflectionRequired = capabilityState(workflow).settings.reflection;
 					const completed = currentStage === "reflect" && (workflow.state.reflection.complete || !reflectionRequired);
@@ -65,11 +77,27 @@ export function createLearningStateExtension(workflow: WorkflowController): Exte
 				} catch (error) {
 					return result(
 						error instanceof Error ? error.message : String(error),
-						{ previousStage, currentStage: workflow.getStage(), state: workflow.getState() },
+						{
+							previousStage,
+							currentStage: workflow.getStage(),
+							state: workflow.getState(),
+							code: "LEARNING_STATE_REJECTED",
+							nextAction: nextActionFor(workflow.getStage()),
+						},
 						true,
 					);
 				}
 			},
 		});
 	};
+}
+
+function nextActionFor(stage: ReturnType<WorkflowController["getStage"]>): string {
+	switch (stage) {
+		case "understand": return "Establish a goal and set understandingReady=true before requesting PLAN.";
+		case "plan": return "Use student_plan to add or approve student-authored steps, then provide planSummary.";
+		case "verify": return "Run verification and report verificationPassed=true or false.";
+		case "reflect": return "Complete reflection and report reflectionComplete=true.";
+		default: return `Complete the ${stage.toUpperCase()} work before requesting the next stage.`;
+	}
 }

@@ -37,6 +37,12 @@ describe("StudentQuestionLoop", () => {
 		expect((await loop.evaluate({ stage: "plan", informationSufficient: true })).shouldAsk).toBe(false);
 	});
 
+	it("treats omitted required flags as optional", async () => {
+		const loop = new StudentQuestionLoop();
+		const questions = [{ id: "optional", prompt: "Anything else?", category: "reflection" as const, required: false }];
+		expect((await loop.processAnswers(questions, [{ questionId: "optional", answer: "" }])).sufficientInformation).toBe(true);
+	});
+
 	it("scales down to one meaningful question for a trivial file request", async () => {
 		const loop = new StudentQuestionLoop();
 		const questions = await loop.buildQuestions({

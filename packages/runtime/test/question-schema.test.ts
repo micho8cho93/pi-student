@@ -10,6 +10,6 @@ describe("student question categories", () => {
 	});
 
 	it("rejects invalid categories before a question can reach the UI", () => {
-		expect(() => normalizeQuestions([{ id: "q1", prompt: "Future?", category: "future-work" }])).toThrow(/invalid/i);
+		expect(() => normalizeQuestions([{ id: "q1", prompt: "Future?", category: "future-work" }])).toThrow(/requirements.*architecture.*review/i);
 	});
 });

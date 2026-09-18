@@ -1,7 +1,7 @@
 import { canTransition } from "./transitions.js";
 import { toolPolicy, type ToolPolicy } from "@pi-student/policy/tool-policy";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
-import { addStudentPlanStep, approveStudentPlan } from "./student-plan.js";
+import { addStudentPlanStep, approveStudentPlan, hasStudentAuthoredSteps } from "./student-plan.js";
 import type { LearningSession, LearningStage, LearningStateUpdate } from "./types.js";
 import type { IntentRoute, LearningIntent } from "./intent.js";
 import type { ProjectContext } from "./project-context.js";
@@ -185,7 +185,7 @@ export class WorkflowController {
 				}
 				break;
 			case "plan":
-				if (!candidate.plan.summary || candidate.plan.steps.length === 0 || !candidate.plan.approved) {
+				if (!candidate.plan.summary || !hasStudentAuthoredSteps(candidate.plan) || !candidate.plan.approved) {
 					throw new LearningStateError(
 						"PLAN requires student-authored steps, a plan summary, and explicit student approval before IMPLEMENT",
 					);
