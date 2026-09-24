@@ -42,3 +42,11 @@ it("adds administrators through an in-app form", () => {
 	expect(page).toContain("title:'Add administrator'");
 	expect(page).toContain("type:'email',required:true");
 });
+
+it("shows owner-deactivated organizations as deleted and read only", () => {
+	const page = platformAdminPage({ url: "https://example.test", publishableKey: "public" });
+	expect(page).toContain("status,deactivated_at,created_at");
+	expect(page).toContain("o.deactivated_at?'Deleted':o.status");
+	expect(page).toContain("if(selected.deactivated_at)");
+	expect(page).toContain("input.disabled=true");
+});

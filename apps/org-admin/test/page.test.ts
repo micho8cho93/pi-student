@@ -24,10 +24,12 @@ it("uses Google OAuth without sending administrator sign-in emails", () => {
 	expect(page).not.toContain('id="email-form"');
 });
 
-it("offers scoped environment, Skill and MCP review without exposing secret values", () => {
+it("offers sandbox site blocking, Skill and MCP review without exposing secret values", () => {
 	const page = orgAdminPage({ url: "https://example.test", publishableKey: "public" });
-	for (const tab of ["environments", "skills", "mcps"]) expect(page).toContain(`data-tab="${tab}"`);
-	for (const rpc of ["save_sandbox_profile", "assign_sandbox_profile", "create_organization_dataset", "attach_profile_dataset", "save_organization_skill", "save_organization_mcp"]) expect(page).toContain(rpc);
+	for (const tab of ["sandbox", "skills", "mcps"]) expect(page).toContain(`data-tab="${tab}"`);
+	expect(page).not.toContain('data-tab="policies"');
+	expect(page).toContain("save_organization_sandbox_blocked_sites");
+	for (const rpc of ["save_organization_skill", "save_organization_mcp"]) expect(page).toContain(rpc);
 	expect(page).toContain("Host-managed secret reference");
 });
 
@@ -39,4 +41,17 @@ it("uses in-app forms for membership, classes, assignments, models, and prices",
 		expect(page).toContain(title);
 	}
 	expect(page).toContain("error.textContent=cause.message||String(cause)");
+});
+
+it("shows organization-owned settings and stages deletion confirmation", () => {
+	const page = orgAdminPage({ url: "https://example.test", publishableKey: "public" });
+	for (const field of ["contact_email", "teachers_can_create_classes", "students_can_join_by_code"]) {
+		expect(page).toContain(field);
+	}
+	expect(page).toContain("Signed in as");
+	expect(page).not.toContain("Product capabilities</h2>");
+	expect(page).toContain("org.role==='owner'?'<h2>Delete organization");
+	expect(page).toContain("phraseForm.classList.add('hidden');finalForm.classList.remove('hidden')");
+	expect(page).toContain("confirmButton.disabled=!checkbox.checked");
+	expect(page).toContain("db.rpc('deactivate_organization'");
 });

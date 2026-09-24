@@ -374,9 +374,10 @@ The interactive teacher dashboard mirrors the browser dashboard with boxed class
 activity, student, project, and session cards. Type a displayed number to open a
 card or switch sections, or use short commands such as `today`, `students`,
 `projects`, `approve 2`, `requirement 1`, `back`, and `quit`. In the Projects
-section, `new` opens a conversational project builder: describe the idea, answer
-Pi's clarifying questions, review the student-facing brief, and confirm before
-saving. Use `edit <number>` later to manually revise the brief. Its browser dashboard
+section, `new` opens a teacher-authored project form in the terminal. Enter the goal,
+learning objectives, standards, requirements, assessment criteria, constraints, and
+student AI guidance, then confirm before saving. Use `edit <number>` later to revise
+the brief. Its browser dashboard
 runs alongside it, and the localhost URL stays visible in every terminal view;
 type `web` to open it. The browser-only dashboard remains available with
 `pi-student teacher web`.
@@ -390,6 +391,16 @@ pi-student teacher project list <class-id>
 ```
 
 Students can open Pi Student and code independently before joining a class.
+
+### Local models with Ollama
+
+Start Ollama with `ollama serve` and download a model that supports tool calling
+with `ollama pull <model>`. Run `pi-student setup`, choose **Ollama (local)**, and
+select a downloaded model. Pi Student saves the connection outside the project
+and uses it in terminal and GUI modes without an API key. The default address is
+`http://127.0.0.1:11434`; another loopback port is allowed. Run setup again to
+change providers or reconnect after starting a stopped Ollama server.
+
 Inside the interactive terminal:
 
 - `/join-class` asks for the teacher's code and uses Google sign-in if needed. Active memberships open the project picker; pending requests explain that teacher approval is required.

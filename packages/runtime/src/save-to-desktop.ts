@@ -3,16 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { assertSandboxPath, type SandboxRuntime } from "@pi-student/sandbox/types";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
+import { SaveToDesktopParams } from "./tool-parameter-schemas.js";
+import { prepareSaveToDesktopArguments } from "./tool-arguments.js";
 
 export const DEFAULT_DESKTOP_EXPORT_LIMIT_BYTES = 100 * 1024 * 1024;
-
-const SaveToDesktopParams = Type.Object({
-	source: Type.String({ description: "File inside /workspace to publish to the user's Desktop" }),
-	filename: Type.Optional(Type.String({ description: "Optional filename to use on the Desktop; defaults to the source filename" })),
-});
 
 export interface DesktopExportOptions {
 	desktopDirectory?: string;
@@ -53,6 +49,7 @@ export function createSaveToDesktopExtension(
 				"Never claim the export succeeded unless this tool reports the saved filename.",
 			],
 			parameters: SaveToDesktopParams,
+			prepareArguments: prepareSaveToDesktopArguments,
 			executionMode: "sequential",
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				try {

@@ -29,6 +29,7 @@ export class SupabaseInstitutionalEnvironmentProvider {
 		}
 		const profile = data.profile as SandboxProfile | null;
 		if (profile) validateProfile(profile, String(data.organizationId));
+		const blockedHosts = validateBlockedHosts(data.blockedSites);
 		const allowed = (requested: unknown): boolean => {
 			if (!Array.isArray(requested) || !requested.every(value => typeof value === "string" && capabilities.has(value))) return false;
 			// Explicit organization approval is necessary, but cannot override student policy.
@@ -48,11 +49,26 @@ export class SupabaseInstitutionalEnvironmentProvider {
 			return rows.filter((row): row is T => row && typeof row === "object" && row.organizationId === data.organizationId && allowed(row.capabilities));
 		};
 		return {
-			sandbox: { mode: "gondolin", internetAllowed: Boolean(profile?.network.allowed), ...(profile ? { profile } : {}) },
+			sandbox: {
+				mode: "gondolin",
+				internetAllowed: (policy?.settings.internet ?? true) && (profile?.network.allowed ?? true),
+				blockedHosts,
+				...(profile ? { profile } : {}),
+			},
 			skills: scoped<SkillDescriptor>(data.skills),
 			mcps: scoped<McpDescriptor>(data.mcps),
 		};
 	}
+}
+
+function validateBlockedHosts(value: unknown): string[] {
+	const label = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+	const hostname = new RegExp(`^${label}(?:\\.${label})+$`);
+	if (!Array.isArray(value) || value.length > 500 || !value.every(host =>
+		typeof host === "string" && host === host.toLowerCase() && host.length <= 253 && hostname.test(host))) {
+		throw new Error("Invalid institutional sandbox blocked sites.");
+	}
+	return [...new Set(value)];
 }
 
 /** Existing provider contracts expose the already-admitted inventory, not an executor. */

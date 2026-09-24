@@ -1,6 +1,8 @@
 export interface SandboxConfig {
 	mode: "host" | "gondolin";
 	internetAllowed?: boolean;
+	/** Hostnames whose sites and subdomains are blocked from sandbox HTTP/HTTPS requests. */
+	blockedHosts?: readonly string[];
 	/** Fully resolved by the control plane; never a host path or install command. */
 	profile?: SandboxProfile;
 }

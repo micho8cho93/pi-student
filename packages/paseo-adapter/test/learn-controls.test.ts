@@ -9,16 +9,23 @@ import { studentUiScript } from "@pi-student/paseo-adapter/web-ui";
 describe("Learn composer adapter", () => {
 	it("generates valid script and uses session identity without submitting a message", () => {
 		const script = studentUiScript(6769).replace(/^\s*<script[^>]*>/, "").replace(/<\/script>\s*$/, "");
+		const learnControls = script.slice(script.indexOf("const mountLearnControls"), script.indexOf("const api ="));
 		expect(() => new Script(script)).not.toThrow();
 		expect(script).toContain('button.setAttribute("aria-pressed", String(enabled))');
 		expect(script).toContain('agent-thinking-selector');
 		expect(script).toContain('combined-model-selector');
+		expect(learnControls.indexOf('querySelectorAll(\'[data-testid="agent-thinking-selector"]\')')).toBeLessThan(learnControls.indexOf('querySelectorAll(\'[data-testid="combined-model-selector"]\')'));
 		expect(script).toContain('button.className = anchor.className');
 		expect(script).toContain('message-input-root');
 		expect(script).toContain('pi-student-learn-next');
-		expect(script).toContain('position: "fixed"');
-		expect(script).toContain('document.body.appendChild(button)');
-		expect(script).toContain('if (!workspaceId || dictationIsActive())');
+		expect(learnControls).toContain('const isNewWorkspace = location.pathname === "/new"');
+		expect(learnControls).toContain('(!workspaceId && !isNewWorkspace)');
+		expect(learnControls).toContain('if (isNewWorkspace) {');
+		expect(learnControls).toContain('else document.querySelector(\'[data-pi-student-learn][data-agent-id="draft"]\')?.remove()');
+		expect(learnControls).toContain('document.body.appendChild(button)');
+		expect(learnControls).toContain('if (isDraft) Object.assign(button.style, { position: "fixed"');
+		expect(learnControls).toContain('anchorItem.insertAdjacentElement("afterend", button)');
+		expect(script).toContain('window.addEventListener("resize", mountLearnControls)');
 		expect(script).toContain('[data-testid="dictation-confirm"], [data-testid="dictation-cancel"]');
 		expect(script).toContain('element.getAttribute("aria-label") === "Stop dictation"');
 		expect(script).toContain('removeLearnControls()');

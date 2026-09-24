@@ -11,8 +11,7 @@ import { openBrowser } from "./open-browser.js";
 import { DictationController } from "@pi-student/runtime/dictation";
 import { runDictationSetup, type DictationSetupUI } from "@pi-student/runtime/dictation-setup";
 import { execFileSync } from "node:child_process";
-import { createDefaultProjectBuilder } from "./project-builder-factory.js";
-import { formatProjectBrief, normalizeProjectBrief, type ProjectBrief, type ProjectBuilderMessage } from "@pi-student/classroom/project-builder";
+import { formatProjectBrief, normalizeProjectBrief, type ProjectBrief } from "@pi-student/classroom/project-builder";
 
 type Relation<T> = T | T[] | null;
 type Profile = { display_name?: string | null; email?: string | null };
@@ -280,28 +279,36 @@ async function updateMembership(client: SupabaseClient, choices: Array<{ type: s
 }
 
 async function createProject(client: SupabaseClient, item: TeacherClass, readline: Interface, write: (value: string) => void, theme: TerminalTheme) {
-	const builder = await createDefaultProjectBuilder();
-	const history: ProjectBuilderMessage[] = [];
-	write(`\n${theme.bold("PROJECT BUILDER")}\n${theme.dim("Describe the project in your own words. I’ll ask focused questions, then turn the conversation into a student-ready brief.")}\n`);
-	while (true) {
-		const input = (await readline.question("\nproject › ")).trim();
-		if (!input || ["cancel", "q", "quit"].includes(input.toLowerCase())) return;
-		const turn = await builder.turn(history, input);
-		history.push({ role: "teacher", content: input }, { role: "assistant", content: turn.message });
-		write(`\n${theme.accent("assistant")} ${turn.message}\n`);
-		if (!turn.ready || !turn.draft) continue;
-		write(`${renderProjectDraft(theme, turn.draft)}\n`);
-		const choice = (await readline.question("Save this project? [Y/n] › ")).trim().toLowerCase();
-		if (choice === "" || choice === "y" || choice === "yes") {
-			const saved = await saveProjectDraft(new SupabaseClassroomRepository(client), item.id, turn.draft);
-			write(`${theme.success(`Saved ${saved.name}. Students will receive this brief when they select the project.`)}\n`);
-			return;
-		}
-		if (["n", "no", "cancel", "q"].includes(choice)) return;
-		write(theme.dim("Tell the assistant what you want to change, and it will revise the draft."));
-	}
+	write(`\n${theme.bold("CREATE PROJECT")}\n${theme.dim("Enter the learning brief students and their AI will use. Leave optional fields blank; separate list items with semicolons.")}\n`);
+	const ask = async (label: string, hint = "") => (await readline.question(`${label}${hint ? ` (${hint})` : ""} › `)).trim();
+	const name = await ask("Project name"); if (!name) return;
+	const description = await ask("Short overview");
+	const subject = await ask("Subject or course");
+	const gradeLevel = await ask("Grade or learner level");
+	const duration = await ask("Suggested duration");
+	const essentialQuestion = await ask("Essential question");
+	const goal = await ask("Student-facing goal"); if (!goal) { write(`${theme.warning("A student-facing goal is required; project was not saved.")}\n`); return; }
+	const objectives = await ask("Learning objectives", "separate with ;");
+	const expectations = await ask("Deliverables and work expectations");
+	const structure = await ask("Milestones or expected structure", "separate with ;");
+	const constraints = await ask("Scope and constraints", "separate with ;");
+	const materials = await ask("Materials and resources", "separate with ;");
+	const differentiation = await ask("Access and differentiation", "separate with ;");
+	const successCriteria = await ask("Assessment and success criteria", "separate with ;");
+	const requirementInput = await ask("Required components", "Title :: details; separate items with ;");
+	const standardsInput = await ask("Standards", "CODE | title; separate items with ;");
+	const studentFocus = await ask("Student focus reminders", "separate with ;");
+	const aiGuidance = await ask("Guidance for the student AI", "help style and concepts to reinforce");
+	const list = (value: string) => value.split(";").map(entry => entry.trim()).filter(Boolean);
+	const requirements = list(requirementInput).map(entry => { const [title, ...details] = entry.split("::"); return { title: title!.trim(), description: details.join("::").trim() }; }).filter(entry => entry.title);
+	const standards = list(standardsInput).map(entry => { const [code, ...title] = entry.split("|"); return { code: code!.trim(), title: title.join("|").trim() }; }).filter(entry => entry.code);
+	const draft = { name, description, brief: { version: 1 as const, subject, gradeLevel, duration, essentialQuestion, goal, objectives: list(objectives), expectations, structure: list(structure), constraints: list(constraints), materials: list(materials), differentiation: list(differentiation), successCriteria: list(successCriteria), studentFocus: list(studentFocus), aiGuidance }, requirements, standards };
+	write(`${renderProjectDraft(theme, draft)}\n`);
+	const choice = (await readline.question("Save this project? [Y/n] › ")).trim().toLowerCase();
+	if (choice && choice !== "y" && choice !== "yes") return;
+	const saved = await saveProjectDraft(new SupabaseClassroomRepository(client), item.id, draft);
+	write(`${theme.success(`Saved ${saved.name}. Students will receive this brief when they select the project.`)}\n`);
 }
-
 function renderProjectDraft(theme: TerminalTheme, draft: { name: string; description: string; brief: ProjectBrief; requirements: Array<{ title: string; description: string }>; standards: Array<{ code: string; title: string }> }): string {
 	return renderExpandedPanel(theme, draft.name, [
 		{ label: "description", value: draft.description || "—" },
@@ -316,13 +323,21 @@ async function editProject(client: SupabaseClient, choices: Array<{ type: string
 	const current = normalizeProjectBrief(project.brief);
 	const name = await keepOrReplace(readline, "Project name", project.name);
 	const description = await keepOrReplace(readline, "Description", project.description ?? "");
+	const subject = await keepOrReplace(readline, "Subject or course", current.subject);
+	const gradeLevel = await keepOrReplace(readline, "Grade or learner level", current.gradeLevel);
+	const duration = await keepOrReplace(readline, "Suggested duration", current.duration);
+	const essentialQuestion = await keepOrReplace(readline, "Essential question", current.essentialQuestion);
 	const goal = await keepOrReplace(readline, "Goal", current.goal);
-	const expectations = await keepOrReplace(readline, "Expectations", current.expectations);
+	const expectations = await keepOrReplace(readline, "Deliverables and work expectations", current.expectations);
 	const objectives = await keepOrReplaceList(readline, "Learning objectives", current.objectives);
-	const structure = await keepOrReplaceList(readline, "Expected structure or milestones", current.structure);
+	const structure = await keepOrReplaceList(readline, "Milestones or expected structure", current.structure);
 	const constraints = await keepOrReplaceList(readline, "Constraints", current.constraints);
-	const successCriteria = await keepOrReplaceList(readline, "Success criteria", current.successCriteria);
-	await updateProjectBrief(new SupabaseClassroomRepository(client), project.id, { name: name || project.name, description: description || null, brief: { version: 1, goal, objectives, expectations, structure, constraints, successCriteria } });
+	const materials = await keepOrReplaceList(readline, "Materials and resources", current.materials);
+	const differentiation = await keepOrReplaceList(readline, "Access and differentiation", current.differentiation);
+	const successCriteria = await keepOrReplaceList(readline, "Assessment and success criteria", current.successCriteria);
+	const studentFocus = await keepOrReplaceList(readline, "Student focus reminders", current.studentFocus);
+	const aiGuidance = await keepOrReplace(readline, "Guidance for the student AI", current.aiGuidance);
+	await updateProjectBrief(new SupabaseClassroomRepository(client), project.id, { name: name || project.name, description: description || null, brief: { version: 1, subject, gradeLevel, duration, essentialQuestion, goal, objectives, expectations, structure, constraints, materials, differentiation, successCriteria, studentFocus, aiGuidance } });
 }
 
 async function keepOrReplace(readline: Interface, label: string, current: string): Promise<string> {

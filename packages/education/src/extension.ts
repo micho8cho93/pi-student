@@ -18,6 +18,24 @@ export function parseQuestion(args: string): { difficulty: "easy" | "medium" | "
 	return { difficulty, topic: (first === difficulty ? rest.join(" ") : args.trim()) || "whole project" };
 }
 
+function prepareCodebaseModelArguments(args: unknown): { action: "overview" | "search" | "inspect" | "map" | "trace" | "refresh"; target?: string } {
+	const input = args !== null && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
+	const rawAction = typeof input.action === "string" ? input.action.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
+	const action = rawAction === "search" || rawAction === "find" || rawAction === "query"
+		? "search"
+		: rawAction === "inspect" || rawAction === "read" || rawAction === "file"
+			? "inspect"
+			: rawAction === "map" || rawAction === "graph" || rawAction === "dependencies"
+				? "map"
+				: rawAction === "trace" || rawAction === "flow"
+					? "trace"
+					: rawAction === "refresh" || rawAction === "rescan" || rawAction === "reload"
+						? "refresh"
+						: "overview";
+	const target = [input.target, input.path, input.file, input.query, input.pattern].find((value): value is string => typeof value === "string" && value.trim().length > 0);
+	return { action, ...(target ? { target: target.trim() } : {}) };
+}
+
 export function registerLearnMode(pi: ExtensionAPI, workflow: WorkflowController, sandbox: SandboxRuntime, settings = new LearnSettingsStore()) {
 	const codebase = new CodebaseModel(sandbox);
 	let questionTurn: "generate" | "answer" | undefined;
@@ -77,6 +95,7 @@ export function registerLearnMode(pi: ExtensionAPI, workflow: WorkflowController
 		name: "codebase_model", label: "Explore codebase",
 		description: "Reusable bounded repository model. overview: manifests and technology map; search: candidate filenames; inspect: source evidence and import relationships; map: observed dependencies; trace: follow local imports from a source file (up to 8 files); refresh: rescan after external changes. Imports are not runtime traces.",
 		parameters: Type.Object({ action: Type.Union([Type.Literal("overview"), Type.Literal("search"), Type.Literal("inspect"), Type.Literal("map"), Type.Literal("trace"), Type.Literal("refresh")]), target: Type.Optional(Type.String()) }),
+		prepareArguments: prepareCodebaseModelArguments,
 		executionMode: "sequential",
 		async execute(_id, params) {
 			try {

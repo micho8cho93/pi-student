@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { StudentQuestionLoop } from "@pi-student/education/student-question-loop";
 import {
 	isQuestionCategory,
@@ -9,37 +8,9 @@ import {
 	type StudentAnswer,
 	type StudentQuestion,
 } from "@pi-student/education/question-context";
-
-const QuestionCategorySchema = Type.Union(
-	QUESTION_CATEGORIES.map((category) => Type.Literal(category)) as [ReturnType<typeof Type.Literal>, ...ReturnType<typeof Type.Literal>[]],
-	{ description: `Educational category. Allowed values: ${QUESTION_CATEGORIES.join(", ")}` },
-);
-const QuestionSchema = Type.Object({
-	id: Type.String({ description: "Stable identifier for this question" }),
-	prompt: Type.String({ description: "The question the student should answer" }),
-	category: QuestionCategorySchema,
-	label: Type.Optional(Type.String({ description: "Short label shown in the prompt" })),
-	note: Type.Optional(Type.String({ description: "Optional short explanation shown with the question" })),
-	options: Type.Optional(Type.Array(Type.String(), { minItems: 2, maxItems: 6 })),
-	allowCustom: Type.Optional(Type.Boolean({ description: "Allow a custom response in addition to the options" })),
-	required: Type.Optional(Type.Boolean({ description: "Whether an answer is needed to continue" })),
-});
-
-const StudentAskParams = Type.Object({
-	questions: Type.Optional(Type.Array(QuestionSchema, {
-		minItems: 1,
-		maxItems: 4,
-		description: "One to four targeted questions; do not use this for trivial confirmations",
-	})),
-});
-
-function result(text: string, details: unknown, isError = false) {
-	return {
-		content: [{ type: "text" as const, text }],
-		details,
-		...(isError ? { isError: true } : {}),
-	};
-}
+import { StudentAskParams } from "./tool-parameter-schemas.js";
+import { prepareStudentAskArguments } from "./tool-arguments.js";
+import { toolResult as result } from "./tool-result.js";
 
 export function createStudentAskExtension(
 	loop = new StudentQuestionLoop(),
@@ -77,6 +48,7 @@ export function createStudentAskExtension(
 				"Questions must affect the current implementation, engineering reasoning, or student's understanding; do not invent speculative future-work questions to satisfy a quota.",
 			],
 			parameters: StudentAskParams,
+			prepareArguments: prepareStudentAskArguments,
 			executionMode: "sequential",
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const round = context.questionRound ?? 0;

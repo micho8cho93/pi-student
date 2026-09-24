@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createLearningSession } from "@pi-student/education/types";
 import { WorkflowController } from "@pi-student/education/workflow-controller";
 import { createStudentPlanExtension } from "@pi-student/runtime/student-plan";
+import { prepareStudentPlanArguments } from "@pi-student/runtime/tool-arguments";
 
 type RegisteredTool = Parameters<ExtensionAPI["registerTool"]>[0];
 
@@ -29,6 +30,22 @@ function enterPlan(controller: WorkflowController): void {
 }
 
 describe("student_plan extension", () => {
+	it("executes the reported add action after harness normalization", async () => {
+		const controller = new WorkflowController(createLearningSession("/tmp/project"));
+		enterPlan(controller);
+		const confirm = vi.fn().mockResolvedValue(true);
+		const tool = registerTool(controller);
+		const rawArgs = { action: "add", description: "Create index.html" };
+
+		await tool.execute("plan-alias", prepareStudentPlanArguments(rawArgs), undefined, undefined, { ui: { confirm } } as never);
+		await tool.execute("plan-approve", prepareStudentPlanArguments({ action: "approve" }), undefined, undefined, { ui: { confirm } } as never);
+
+		expect(controller.state.plan.steps).toHaveLength(1);
+		expect(controller.state.plan.steps[0]).toMatchObject({ description: "Create index.html", studentAuthored: true });
+		expect(confirm).toHaveBeenCalledWith("Add this student-authored plan step?", "Create index.html");
+		expect(confirm).toHaveBeenCalledWith("Approve implementation plan?", "○ 1. Create index.html");
+	});
+
 	it("does not offer approval when the plan has no student-authored steps", async () => {
 		const controller = new WorkflowController(createLearningSession("/tmp/project"));
 		enterPlan(controller);

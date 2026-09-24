@@ -21,6 +21,9 @@ Paseo itself includes general workspace, terminal, and Git UI features. For
 the student build, the terminal profile list is explicitly empty and the
 launcher applies a small web UI shell override that removes host management,
 session import, schedules, browser launch, and profile-management controls.
-The remaining launch choices are the student agent and the terminal. This is
-an app-shell restriction; it does not change Paseo's underlying generic
+The student launch choices are Chat, Terminal, and Flowchart in both existing
+workspaces and the new-workspace screen. Flowchart opens a read-only, zoomable
+diagram generated from the selected project's current source files. Refresh
+scans the source again and regenerates the diagram.
+This is an app-shell restriction; it does not change Paseo's underlying generic
 workspace capabilities.

@@ -2,12 +2,20 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export interface ProjectBrief {
 	version: 1;
+	subject: string;
+	gradeLevel: string;
+	duration: string;
+	essentialQuestion: string;
 	goal: string;
 	objectives: string[];
 	expectations: string;
 	structure: string[];
 	constraints: string[];
+	materials: string[];
+	differentiation: string[];
 	successCriteria: string[];
+	studentFocus: string[];
+	aiGuidance: string;
 }
 
 export interface ProjectBuilderMessage {
@@ -96,24 +104,40 @@ export function normalizeProjectBrief(value: unknown): ProjectBrief {
 	const source = record(value);
 	return {
 		version: 1,
+		subject: stringValue(source.subject),
+		gradeLevel: stringValue(source.gradeLevel),
+		duration: stringValue(source.duration),
+		essentialQuestion: stringValue(source.essentialQuestion),
 		goal: stringValue(source.goal),
 		objectives: stringArray(source.objectives),
 		expectations: stringValue(source.expectations),
 		structure: stringArray(source.structure),
 		constraints: stringArray(source.constraints),
+		materials: stringArray(source.materials),
+		differentiation: stringArray(source.differentiation),
 		successCriteria: stringArray(source.successCriteria),
+		studentFocus: stringArray(source.studentFocus),
+		aiGuidance: stringValue(source.aiGuidance),
 	};
 }
 
 export function formatProjectBrief(brief: Partial<ProjectBrief> | null | undefined): string {
 	const normalized = normalizeProjectBrief(brief);
 	return [
+		normalized.subject ? `Subject: ${normalized.subject}` : "",
+		normalized.gradeLevel ? `Grade level: ${normalized.gradeLevel}` : "",
+		normalized.duration ? `Suggested duration: ${normalized.duration}` : "",
+		normalized.essentialQuestion ? `Essential question: ${normalized.essentialQuestion}` : "",
 		`Goal: ${normalized.goal || "Not specified"}`,
 		normalized.objectives.length ? `Learning objectives: ${normalized.objectives.join("; ")}` : "",
 		normalized.expectations ? `Expectations: ${normalized.expectations}` : "",
 		normalized.structure.length ? `Expected structure: ${normalized.structure.join("; ")}` : "",
 		normalized.constraints.length ? `Constraints: ${normalized.constraints.join("; ")}` : "",
+		normalized.materials.length ? `Materials and resources: ${normalized.materials.join("; ")}` : "",
+		normalized.differentiation.length ? `Access and differentiation: ${normalized.differentiation.join("; ")}` : "",
 		normalized.successCriteria.length ? `Success criteria: ${normalized.successCriteria.join("; ")}` : "",
+		normalized.studentFocus.length ? `Keep the student focused on: ${normalized.studentFocus.join("; ")}` : "",
+		normalized.aiGuidance ? `Teacher guidance for AI support: ${normalized.aiGuidance}` : "",
 	].filter(Boolean).join("\n");
 }
 

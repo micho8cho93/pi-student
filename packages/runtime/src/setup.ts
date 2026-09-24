@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { stdin as defaultInput, stdout as defaultOutput } from "node:process";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { persistApiKey } from "./auth-storage.js";
+import { DEFAULT_OLLAMA_URL, OLLAMA_PROVIDER_ID, readOllamaConfig, registerOllama, saveOllamaUrl } from "./ollama.js";
 import { createTheme, indent, renderSetupHeader, type TerminalTheme } from "./ui.js";
 
 export interface SetupIO {
@@ -25,9 +26,11 @@ interface ProviderChoice {
 	label: string;
 	url?: string;
 	oauth?: boolean;
+	local?: boolean;
 }
 
 const PROVIDERS: readonly ProviderChoice[] = [
+	{ id: OLLAMA_PROVIDER_ID, label: "Ollama (local)", local: true },
 	{ id: "openai", label: "OpenAI", url: "https://platform.openai.com/api-keys" },
 	{ id: "anthropic", label: "Anthropic", url: "https://console.anthropic.com/settings/keys" },
 	{ id: "openai-codex", label: "OpenAI Codex", url: "https://chatgpt.com/", oauth: true },
@@ -51,7 +54,10 @@ export async function ensureProviderConfigured(runtime: ModelRuntime, io: SetupI
 	}
 
 	const configured = availableProviderChoices(runtime).filter((choice) => runtime.getProviderAuthStatus(choice.id).configured);
-	const reason = configured.length > 0
+	const ollamaSaved = Boolean(await readOllamaConfig());
+	const reason = ollamaSaved && !runtime.getProvider(OLLAMA_PROVIDER_ID)
+		? "Saved Ollama connection is unavailable. Start Ollama and check that it has a downloaded model."
+		: configured.length > 0
 		? "Pi found a configured provider, but it is not currently usable. You can replace its key below."
 		: "No model provider is configured yet.";
 	output.write(`${renderSetupHeader(theme)}${theme.warning(`  ${reason}`)}\n`);
@@ -75,6 +81,7 @@ export async function runProviderSetup(
 		choices.forEach((choice, index) => {
 			const status = runtime.getProviderAuthStatus(choice.id).configured
 				? theme.success("configured")
+				: choice.local ? theme.dim("runs on this computer")
 				: "oauth" in choice && choice.oauth
 					? theme.dim("OAuth / connector")
 					: theme.dim("API key");
@@ -85,6 +92,28 @@ export async function runProviderSetup(
 		if (!choice) throw new SetupCancelledError();
 
 		const guide = choices.find((provider) => provider.id === choice.id)!;
+		if (guide.local) {
+			const defaultUrl = (await readOllamaConfig())?.url ?? DEFAULT_OLLAMA_URL;
+			output.write(`\n${theme.muted("Start Ollama (ollama serve) and download a tool-capable model (ollama pull <model>) first.")}\n`);
+			output.write(`Ollama address ${theme.dim(`(${defaultUrl}; Enter to use it)`)} › `);
+			const answer = await lines.next();
+			if (answer.done) throw new SetupCancelledError();
+			let models: readonly string[];
+			try {
+				models = await registerOllama(runtime, answer.value.trim() || defaultUrl);
+				await runtime.refresh({ allowNetwork: false, providers: [OLLAMA_PROVIDER_ID] });
+			} catch (error) {
+				output.write(`${theme.error(error instanceof Error ? error.message : String(error))}\n`);
+				return runProviderSetup(runtime, { input, output, readline, theme });
+			}
+			output.write(`\n${theme.bold("Downloaded models")}\n`);
+			models.forEach((id, index) => output.write(`  ${theme.accent(String(index + 1))}. ${id}\n`));
+			const model = await askUntil(readline, lines, output, "\nModel › ", answer => resolveChoice(answer, models.map(id => ({ id, label: id }))));
+			if (!model) throw new SetupCancelledError();
+			await saveOllamaUrl(answer.value.trim() || defaultUrl, model.id);
+			output.write(`${theme.success("✓ Ollama connected")} ${theme.dim(model.id)}\n`);
+			return { providerId: OLLAMA_PROVIDER_ID, modelId: model.id };
+		}
 		if ("oauth" in guide && guide.oauth) return loginWithOAuth(runtime, choice.id, lines, input, output, theme);
 		output.write(`\n${theme.muted(guide.url ? `${guide.label} API keys: ${guide.url}` : `${guide.label} uses the configured Pi provider credentials.`)}\n`);
 		output.write(`${theme.dim("  Your key is stored in Pi's global auth.json (outside this project) and is never shown.")}\n`);
@@ -122,6 +151,10 @@ export async function pickModel(
 	providerId: string,
 ): Promise<Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number] | undefined> {
 	const available = await runtime.getAvailable(providerId);
+	if (providerId === OLLAMA_PROVIDER_ID) {
+		const selected = (await readOllamaConfig())?.modelId;
+		return available.find(model => model.id === selected) ?? available[0];
+	}
 	const preferred = ["gpt-4.1-mini", "claude-sonnet-4-5", "gemini-2.5-flash", "deepseek-chat"];
 	return preferred.map((id) => available.find((model) => model.id === id)).find(Boolean) ?? available[0];
 }
@@ -159,7 +192,7 @@ export async function findReadyProvider(runtime: ModelRuntime): Promise<Provider
 }
 
 function availableProviderChoices(runtime: ModelRuntime) {
-	const curated = PROVIDERS.filter((choice) => runtime.getProvider(choice.id));
+	const curated = PROVIDERS.filter((choice) => choice.local || runtime.getProvider(choice.id));
 	const curatedIds = new Set(curated.map((choice) => choice.id));
 	const configuredExtras = runtime.getProviders()
 		.filter((provider) => !curatedIds.has(provider.id) && runtime.getProviderAuthStatus(provider.id).configured)

@@ -1,8 +1,9 @@
 import { patchLearnControlsBundle } from "./learn-controls-patch.js";
+import { flowchartUiScript } from "./flowchart-ui.js";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const STUDENT_UI_MARKER = "data-pi-student-ui=\"student-v7\"";
+const STUDENT_UI_MARKER = "data-pi-student-ui=\"student-v12\"";
 
 // Paseo owns the bundled web UI, so keep this small student-specific shell
 // override here rather than forking the whole vendor web application.
@@ -55,9 +56,9 @@ export const studentUiScript = (ecosystemPort: number) => `
           const page = mount?.shadowRoot?.querySelector(".panel-backdrop");
           if (!page) return;
           const main = findMainArea();
-          if (!main) { closeEcosystemPage(); return; }
-          const rect = main.getBoundingClientRect();
-          Object.assign(page.style, { left: rect.left + "px", top: rect.top + "px", width: rect.width + "px", height: rect.height + "px" });
+          const rect = main?.getBoundingClientRect();
+          const bounds = rect ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+          Object.assign(page.style, { left: bounds.left + "px", top: bounds.top + "px", width: bounds.width + "px", height: bounds.height + "px" });
           const reference = document.querySelector('[data-testid="workspace-header-title"]') || sidebarList()?.querySelector('[dir="auto"]');
           const textStyle = getComputedStyle(reference || main);
           mount.style.fontFamily = textStyle.fontFamily;
@@ -70,13 +71,13 @@ export const studentUiScript = (ecosystemPort: number) => `
               break;
             }
           }
-          if (coveredMain !== main) {
+          if (main && coveredMain !== main) {
             releaseMainArea();
             coveredMain = main;
             coveredMainWasInert = main.inert;
             main.inert = true;
             pageResizeObserver?.observe(main);
-          }
+          } else if (!main) releaseMainArea();
         };
         const hiddenTestIds = new Set([
           "sidebar-hosts-trigger",
@@ -209,6 +210,7 @@ export const studentUiScript = (ecosystemPort: number) => `
 
           mountLearnControls();
           mountEcosystem();
+          mountProviderSettings();
           positionEcosystemPage();
         };
 
@@ -225,19 +227,23 @@ export const studentUiScript = (ecosystemPort: number) => `
 
         const mountLearnControls = () => {
           const workspaceId = location.pathname.match(/\\/workspace\\/(wks_[A-Za-z0-9_-]+)/)?.[1];
-          if (!workspaceId || dictationIsActive()) {
+          const isNewWorkspace = location.pathname === "/new";
+          if ((!workspaceId && !isNewWorkspace) || dictationIsActive()) {
             removeLearnControls();
             return;
           }
           const containers = [...document.querySelectorAll("[data-pi-student-agent-id]")];
-          document.querySelectorAll('[data-testid="message-input-root"]').forEach(container => {
-            if (!container.closest("[data-pi-student-agent-id]") && isVisible(container) && container.querySelector('[data-testid="combined-model-selector"]')) containers.push(container);
-          });
-          if (!containers.some(container => !container.hasAttribute("data-pi-student-agent-id"))) document.querySelector('[data-pi-student-learn][data-agent-id="draft"]')?.remove();
+          if (isNewWorkspace) {
+            document.querySelectorAll('[data-testid="message-input-root"]').forEach(container => {
+              if (!container.closest("[data-pi-student-agent-id]") && isVisible(container) && container.querySelector('[data-testid="combined-model-selector"]')) containers.push(container);
+            });
+          } else document.querySelector('[data-pi-student-learn][data-agent-id="draft"]')?.remove();
           containers.forEach(container => {
             const agentId = container.getAttribute("data-pi-student-agent-id");
             const isDraft = !agentId;
-            const anchor = [...container.querySelectorAll('[data-testid="agent-thinking-selector"], [data-testid="agent-controls-thinking"], [data-testid="combined-model-selector"]')].find(isVisible)
+            const anchor = [...container.querySelectorAll('[data-testid="agent-thinking-selector"]')].find(isVisible)
+              || [...container.querySelectorAll('[data-testid="agent-controls-thinking"]')].find(isVisible)
+              || [...container.querySelectorAll('[data-testid="combined-model-selector"]')].find(isVisible)
               || [...container.querySelectorAll('button, [role="button"]')].find(node => !node.hasAttribute("data-pi-student-learn") && node.getClientRects().length > 0);
             if (!anchor) return;
             // AgentControls renders one native flex row beneath our display:contents
@@ -275,7 +281,9 @@ export const studentUiScript = (ecosystemPort: number) => `
             // Its text node is cloned separately so theme typography/color stay exact.
             button.className = anchor.className;
             button.style.cssText = anchor.style.cssText;
-            if (isDraft) Object.assign(button.style, { position: "fixed", zIndex: "20" });
+            button.style.flexShrink = "0";
+            button.style.whiteSpace = "nowrap";
+            if (isDraft) Object.assign(button.style, { position: "fixed", zIndex: "1000", pointerEvents: "auto" });
             const anchorText = [...anchor.querySelectorAll("*")].reverse().find(node => !node.children.length && node.textContent?.trim());
             const label = anchorText ? anchorText.cloneNode(false) : document.createElement("span");
             button.appendChild(label);
@@ -431,7 +439,7 @@ export const studentUiScript = (ecosystemPort: number) => `
             mount.style.setProperty("--page-background", getComputedStyle(document.body).backgroundColor);
           }
           const shadow = mount.attachShadow({ mode: "open" });
-          shadow.innerHTML = '<style>:host{display:block;color:inherit;font:inherit}.wrap{border-top:1px solid rgba(127,127,127,.2);padding:10px 8px}.eyebrow{font-size:10px;font-weight:700;letter-spacing:.11em;opacity:.55;padding:4px 7px}.section{margin-top:3px}.section-head{width:100%;border:0;background:transparent;color:inherit;display:flex;gap:7px;align-items:center;padding:7px;border-radius:7px;text-align:left;font:inherit;cursor:pointer}.section-icon{display:grid;place-items:center;width:16px;height:16px;flex:none}.section-icon svg{grid-area:1/1;width:16px;height:16px}.section-chevron{opacity:0}.section-head:hover .section-symbol,.section-head:focus-visible .section-symbol{opacity:0}.section-head:hover .section-chevron,.section-head:focus-visible .section-chevron{opacity:1}.section-head:focus-visible{outline:2px solid currentColor;outline-offset:-2px}.section-head:hover,.item:hover{background:rgba(127,127,127,.12)}.body{padding:2px 7px 8px 27px;display:grid;gap:5px}.muted{opacity:.58}.ok{color:#2da66f}.bad{color:#d85c5c}.item{border:0;background:transparent;color:inherit;text-align:left;padding:3px 0;border-radius:5px;font:inherit;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.link{border:0;background:transparent;color:#3b82f6;text-align:left;padding:4px 0;font:inherit;cursor:pointer}.action{border:1px solid rgba(127,127,127,.3);background:transparent;color:inherit;border-radius:7px;padding:7px 10px;font:inherit;cursor:pointer}.action.primary{background:var(--page-primary,currentColor);color:var(--page-background,#181b1a);border-color:transparent}.action.success{background:#16a34a;border-color:#16a34a;color:#fff}.action.danger{background:#dc2626;border-color:#dc2626;color:#fff}.actions{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.panel-backdrop{position:fixed;background:var(--page-background);color:inherit;z-index:10;overflow:auto;font-size:14px;line-height:1.5}.panel{box-sizing:border-box;width:min(100%,880px);min-height:100%;margin:0 auto;padding:32px clamp(20px,4vw,48px) 48px}.panel h2{margin:20px 0 16px;font-size:24px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}.panel h3{font-size:14px;font-weight:600;margin:28px 0 12px}.card{border:1px solid color-mix(in srgb,currentColor 14%,transparent);border-radius:8px;padding:16px;margin:8px 0;overflow-wrap:anywhere}.row{display:flex;justify-content:space-between;gap:24px;padding:12px 0;border-bottom:1px solid color-mix(in srgb,currentColor 10%,transparent)}.row span:first-child{opacity:.6;flex-shrink:0}.row span:last-child{text-align:right;overflow-wrap:anywhere;min-width:0}.close{border:0;background:none;color:inherit;cursor:pointer;font:inherit;padding:4px 0;opacity:.65}.panel .item{display:block;width:100%;padding:12px;margin:8px 0;border:1px solid color-mix(in srgb,currentColor 14%,transparent)}button:focus-visible{outline:2px solid currentColor;outline-offset:3px}.action:hover{background:color-mix(in srgb,currentColor 10%,transparent)}.action.primary:hover{background:color-mix(in srgb,var(--page-primary,currentColor) 84%,transparent)}.action.success:hover{background:#15803d;border-color:#15803d}.action.danger:hover{background:#b91c1c;border-color:#b91c1c}.error{color:#ff8f8f;white-space:pre-wrap}.progress{padding:7px;border-radius:7px;background:rgba(52,120,212,.12)}</style><div class="wrap"></div>';
+          shadow.innerHTML = '<style>:host{display:block;color:inherit;font:inherit}.wrap{border-top:1px solid rgba(127,127,127,.2);padding:10px 8px}.eyebrow{font-size:10px;font-weight:700;letter-spacing:.11em;opacity:.55;padding:4px 7px}.section{margin-top:3px}.section-head{width:100%;border:0;background:transparent;color:inherit;display:flex;gap:7px;align-items:center;padding:7px;border-radius:7px;text-align:left;font:inherit;cursor:pointer}.section-icon{display:grid;place-items:center;width:16px;height:16px;flex:none}.section-icon svg{grid-area:1/1;width:16px;height:16px}.section-chevron{opacity:0}.section-head:hover .section-symbol,.section-head:focus-visible .section-symbol{opacity:0}.section-head:hover .section-chevron,.section-head:focus-visible .section-chevron{opacity:1}.section-head:focus-visible{outline:2px solid currentColor;outline-offset:-2px}.section-head:hover,.item:hover{background:rgba(127,127,127,.12)}.body{padding:2px 7px 8px 27px;display:grid;gap:5px}.muted{opacity:.58}.ok{color:#2da66f}.bad{color:#d85c5c}.item{border:0;background:transparent;color:inherit;text-align:left;padding:3px 0;border-radius:5px;font:inherit;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.link{border:0;background:transparent;color:#3b82f6;text-align:left;padding:4px 0;font:inherit;cursor:pointer}.action{border:1px solid rgba(127,127,127,.3);background:transparent;color:inherit;border-radius:7px;padding:7px 10px;font:inherit;cursor:pointer}.action.primary{background:var(--page-primary,currentColor);color:var(--page-background,#181b1a);border-color:transparent}.action.success{background:#16a34a;border-color:#16a34a;color:#fff}.action.danger{background:#dc2626;border-color:#dc2626;color:#fff}.actions{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.provider-input{box-sizing:border-box;min-width:220px;max-width:100%;padding:8px 10px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);border-radius:7px;background:transparent;color:inherit;font:inherit}.panel-backdrop{position:fixed;background:var(--page-background);color:inherit;z-index:10;overflow:auto;font-size:14px;line-height:1.5}.panel{box-sizing:border-box;width:min(100%,880px);min-height:100%;margin:0 auto;padding:32px clamp(20px,4vw,48px) 48px}.panel h2{margin:20px 0 16px;font-size:24px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}.panel h3{font-size:14px;font-weight:600;margin:28px 0 12px}.card{border:1px solid color-mix(in srgb,currentColor 14%,transparent);border-radius:8px;padding:16px;margin:8px 0;overflow-wrap:anywhere}.row{display:flex;justify-content:space-between;gap:24px;padding:12px 0;border-bottom:1px solid color-mix(in srgb,currentColor 10%,transparent)}.row span:first-child{opacity:.6;flex-shrink:0}.row span:last-child{text-align:right;overflow-wrap:anywhere;min-width:0}.close{border:0;background:none;color:inherit;cursor:pointer;font:inherit;padding:4px 0;opacity:.65}.panel .item{display:block;width:100%;padding:12px;margin:8px 0;border:1px solid color-mix(in srgb,currentColor 14%,transparent)}button:focus-visible{outline:2px solid currentColor;outline-offset:3px}.action:hover{background:color-mix(in srgb,currentColor 10%,transparent)}.action.primary:hover{background:color-mix(in srgb,var(--page-primary,currentColor) 84%,transparent)}.action.success:hover{background:#15803d;border-color:#15803d}.action.danger:hover{background:#b91c1c;border-color:#b91c1c}.error{color:#ff8f8f;white-space:pre-wrap}.progress{padding:7px;border-radius:7px;background:rgba(52,120,212,.12)}</style><div class="wrap"></div>';
           shadow.querySelector("style").textContent += '.link{color:#2563eb!important;-webkit-text-fill-color:#2563eb!important}';
           host.appendChild(mount);
           document.querySelector("#pi-student-ecosystem-page")?.remove();
@@ -572,6 +580,111 @@ export const studentUiScript = (ecosystemPort: number) => `
           (github.repositories || []).forEach(repo => panel.appendChild(repositoryCard(repo)));
         };
 
+        const mountProviderSettings = () => {
+          const host = document.querySelector('[data-testid="host-page-providers-card"]');
+          document.querySelectorAll("[data-pi-student-model-providers]").forEach(node => { if (!host || !host.contains(node)) node.remove(); });
+          if (!host || host.querySelector("[data-pi-student-model-providers]")) return;
+          const section = element("div", "");
+          section.dataset.piStudentModelProviders = "true";
+          Object.assign(section.style, { borderTop: "1px solid rgba(127,127,127,.22)", marginTop: "18px", paddingTop: "18px", color: "inherit", font: "inherit" });
+          const textReference = [...host.querySelectorAll("div")].find(node => node.children.length === 0 && node.textContent.trim() === "Providers");
+          section.style.color = getComputedStyle(textReference || host).color;
+          const title = element("div", "", "Pi Student model providers");
+          Object.assign(title.style, { fontSize: "16px", fontWeight: "600", marginBottom: "5px" });
+          const intro = element("div", "", "Connect providers for Pi Student models. These connections are shared with the TUI and stored in Pi's local credential files.");
+          Object.assign(intro.style, { opacity: ".68", marginBottom: "14px" });
+          const status = Object.create(null);
+          const cards = Object.create(null);
+          const addCard = (id, label, description) => {
+            const card = element("div", "");
+            Object.assign(card.style, { border: "1px solid rgba(127,127,127,.2)", borderRadius: "8px", padding: "14px", margin: "10px 0" });
+            const head = element("div", "", label); Object.assign(head.style, { fontWeight: "600", marginBottom: "4px" });
+            const state = element("div", "", description); Object.assign(state.style, { opacity: ".68" });
+            const models = element("div", "", ""); Object.assign(models.style, { opacity: ".68", marginTop: "5px" });
+            card.append(head, state, models); section.appendChild(card);
+            status[id] = state; cards[id] = { card, models };
+            return card;
+          };
+          const input = (label, placeholder, type = "text") => {
+            const field = element("input", "");
+            field.type = type; field.placeholder = placeholder; field.setAttribute("aria-label", label);
+            Object.assign(field.style, { boxSizing: "border-box", minWidth: "240px", maxWidth: "100%", padding: "8px 10px", marginRight: "8px", border: "1px solid rgba(127,127,127,.3)", borderRadius: "6px", background: "transparent", color: "inherit", font: "inherit" });
+            return field;
+          };
+          const button = (label, action) => {
+            const control = element("button", "", label); control.type = "button";
+            Object.assign(control.style, { padding: "8px 12px", marginTop: "8px", border: "1px solid rgba(127,127,127,.3)", borderRadius: "6px", background: "transparent", color: "inherit", font: "inherit", cursor: "pointer" });
+            control.addEventListener("click", action); return control;
+          };
+          const openai = addCard("openai", "OpenAI API", "Connect with an OpenAI API key.");
+          const openaiKey = input("OpenAI API key", "sk-…", "password"); openaiKey.autocomplete = "new-password";
+          openai.appendChild(openaiKey);
+          openai.appendChild(button("Save API key", async event => {
+            const control = event.currentTarget; if (!openaiKey.value.trim()) return;
+            control.disabled = true;
+            try { await api("/providers/openai", { method: "POST", body: JSON.stringify({ apiKey: openaiKey.value }) }); openaiKey.value = ""; await refreshProviderSettings(); }
+            catch (error) { status.openai.textContent = error.message; }
+            finally { control.disabled = false; }
+          }));
+          const codex = addCard("openai-codex", "Codex", "Connect your ChatGPT account.");
+          const codexStatus = element("div", ""); Object.assign(codexStatus.style, { marginTop: "8px" }); codex.appendChild(codexStatus);
+          const promptRoot = element("div", ""); codex.appendChild(promptRoot);
+          let promptSignature = "";
+          let codexLoginActive = false;
+          const connectCodex = button("Connect Codex", async event => {
+            const control = event.currentTarget; control.disabled = true;
+            try { await api("/providers/codex/login", { method: "POST", body: "{}" }); codexLoginActive = true; void pollCodex(); }
+            catch (error) { status["openai-codex"].textContent = error.message; control.disabled = false; }
+          }); codex.appendChild(connectCodex);
+          const ollama = addCard("ollama", "Ollama", "Connect a local Ollama server with downloaded models.");
+          const ollamaUrl = input("Ollama server address", "http://127.0.0.1:11434"); ollama.appendChild(ollamaUrl);
+          ollama.appendChild(button("Connect Ollama", async event => {
+            const control = event.currentTarget; control.disabled = true;
+            try { await api("/providers/ollama", { method: "POST", body: JSON.stringify({ url: ollamaUrl.value }) }); await refreshProviderSettings(); }
+            catch (error) { status.ollama.textContent = error.message; }
+            finally { control.disabled = false; }
+          }));
+          host.appendChild(section);
+
+          const refreshProviderSettings = async () => {
+            try {
+              const data = await api("/providers");
+              data.providers.forEach(provider => {
+                status[provider.id].textContent = provider.configured ? "✓ Connected" : "Not connected";
+                cards[provider.id].models.textContent = provider.models?.length ? "Models: " + provider.models.slice(0, 6).join(", ") + (provider.models.length > 6 ? "…" : "") : "";
+                if (provider.id === "openai-codex") connectCodex.textContent = provider.configured ? "Reconnect Codex" : "Sign in to Codex";
+              });
+              ollamaUrl.value = data.ollamaUrl || ollamaUrl.value;
+              const login = data.codexLogin;
+              if (login?.status !== "connecting") { codexLoginActive = false; connectCodex.disabled = false; }
+              else connectCodex.disabled = true;
+              codexStatus.textContent = login?.status === "connecting" ? (login.message || "Waiting for Codex sign-in…") : login?.status === "failed" ? (login.error || "Codex sign-in failed.") : login?.status === "connected" ? (login.message || "Codex connected.") : "";
+              if (login?.url) {
+                codexStatus.appendChild(document.createTextNode(" "));
+                const open = button(login.code ? "Open sign-in page · code " + login.code : "Open Codex sign-in", () => window.open(login.url, "_blank", "noopener"));
+                codexStatus.appendChild(open);
+              }
+              const prompt = login?.prompt;
+              const signature = prompt ? JSON.stringify(prompt) : "";
+              if (signature !== promptSignature) {
+                promptSignature = signature; promptRoot.replaceChildren();
+                if (prompt) {
+                  promptRoot.appendChild(element("div", "", prompt.message));
+                  prompt.options?.forEach((option, index) => promptRoot.appendChild(element("div", "", (index + 1) + ". " + option.label + (option.description ? " — " + option.description : ""))));
+                  const answer = input("Codex sign-in response", prompt.type === "select" ? "Enter a number" : "Enter the requested value", prompt.type === "secret" ? "password" : "text");
+                  promptRoot.appendChild(answer);
+                  promptRoot.appendChild(button("Continue", async () => { await api("/providers/codex/answer", { method: "POST", body: JSON.stringify({ answer: answer.value }) }); promptSignature = ""; await refreshProviderSettings(); }));
+                }
+              }
+            } catch (error) { status.openai.textContent = error.message; }
+          };
+          const pollCodex = async () => {
+            await refreshProviderSettings();
+            if (codexLoginActive) window.setTimeout(pollCodex, 1200);
+          };
+          void refreshProviderSettings();
+        };
+
         const repositoryCard = repo => {
           const card = element("div", "card");
           card.appendChild(element("strong", "", repo.fullName));
@@ -610,6 +723,7 @@ export const studentUiScript = (ecosystemPort: number) => `
         const start = () => {
           hideStudentControls();
           window.addEventListener("resize", positionEcosystemPage);
+          window.addEventListener("resize", mountLearnControls);
           pageResizeObserver = new ResizeObserver(positionEcosystemPage);
           pageResizeObserver.observe(document.body);
           document.addEventListener("click", event => {
@@ -683,9 +797,11 @@ export async function patchPaseoWebUi(paseoExecutable: string, ecosystemPort = 6
 
 	await patchLearnControlsBundle(indexPath);
 	const original = await readFile(indexPath, "utf8");
-	const script = studentUiScript(ecosystemPort);
+	const script = studentUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort);
 	if (original.includes(script)) return false;
-	const html = original.replace(/\s*<script data-pi-student-ui="[^"]*">[\s\S]*?<\/script>/g, "");
+	const html = original
+		.replace(/\s*<script data-pi-student-ui="[^"]*">[\s\S]*?<\/script>/g, "")
+		.replace(/\s*<script data-pi-student-flowchart="[^"]*">[\s\S]*?<\/script>/g, "");
 	const insertionPoint = "</head>";
 	if (!html.includes(insertionPoint)) throw new Error(`Paseo web UI is missing its head element: ${indexPath}`);
 	await writeFile(indexPath, html.replace(insertionPoint, `${script}\n  ${insertionPoint}`));

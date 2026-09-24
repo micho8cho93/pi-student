@@ -10,7 +10,7 @@ import { initTheme, InteractiveMode, runRpcMode } from "@earendil-works/pi-codin
 import { createLearningAgentRuntime, createLearningAgentSession, createStudentRuntime, DirectModelProvider, FileTeacherContextStore, StoredPolicyProvider } from "@pi-student/sdk";
 import { createRuntimeSessionManager, parseStudentRuntimeArgs, splitModelId } from "@pi-student/runtime/runtime-args";
 import { runRepl } from "./terminal/repl.js";
-import { ensureProviderConfigured, findReadyProvider, SetupCancelledError } from "@pi-student/runtime/setup";
+import { ensureProviderConfigured, findReadyProvider, runProviderSetup, SetupCancelledError } from "@pi-student/runtime/setup";
 import { redactSecrets } from "@pi-student/runtime/ui";
 import { readSandboxMode } from "@pi-student/sdk/sandbox";
 import { SandboxRuntimeError } from "@pi-student/sandbox/types";
@@ -46,6 +46,19 @@ async function main(): Promise<void> {
 		await launchPaseoGui({ runtimeEntry: CLIENT_RUNTIME_ENTRY });
 		return;
 	}
+	if (command === "setup") {
+		if (flags.length) throw new Error(`Unknown setup option: ${flags[0]}`);
+		if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run pi-student setup in an interactive terminal.");
+		const modelRuntime = (await DirectModelProvider.create()).runtime;
+		await modelRuntime.refresh({ allowNetwork: false });
+		try {
+			const selected = await runProviderSetup(modelRuntime);
+			process.stdout.write(`Configured model: ${selected.providerId}/${selected.modelId}\n`);
+		} catch (error) {
+			if (!(error instanceof SetupCancelledError)) throw error;
+		}
+		return;
+	}
 	if (command === "runtime") {
 		await runSharedRuntime(flags);
 		return;
@@ -77,7 +90,7 @@ async function main(): Promise<void> {
 	}
 	if (command === "--help" || command === "-h") {
 		process.stdout.write([
-			"Usage: pi-student [terminal|gui]",
+			"Usage: pi-student [terminal|gui|setup]",
 			"       pi-student [doctor|repair] [--verbose]",
 			"       pi-student publish [--yes]",
 			"       pi-student github [connect|status|repositories]",

@@ -1,24 +1,9 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { formatStudentPlan, hasStudentAuthoredSteps } from "@pi-student/education/student-plan";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
-
-const StudentPlanParams = Type.Object({
-	action: Type.Union([
-		Type.Literal("add_step"),
-		Type.Literal("approve"),
-		Type.Literal("status"),
-	]),
-	description: Type.Optional(Type.String({ description: "A student-authored implementation step" })),
-});
-
-function result(text: string, details: unknown, isError = false) {
-	return {
-		content: [{ type: "text" as const, text }],
-		details,
-		...(isError ? { isError: true } : {}),
-	};
-}
+import { StudentPlanParams } from "./tool-parameter-schemas.js";
+import { prepareStudentPlanArguments } from "./tool-arguments.js";
+import { toolResult as result, ToolExecutionError } from "./tool-result.js";
 
 export function createStudentPlanExtension(workflow: WorkflowController): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
@@ -34,6 +19,7 @@ export function createStudentPlanExtension(workflow: WorkflowController): Extens
 				"The only valid actions are add_step, approve, and status; do not guess other action names.",
 			],
 			parameters: StudentPlanParams,
+			prepareArguments: prepareStudentPlanArguments,
 			executionMode: "sequential",
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				try {
@@ -58,6 +44,7 @@ export function createStudentPlanExtension(workflow: WorkflowController): Extens
 								recoverable: true,
 								nextAction: "Ask the student to select or type at least one concrete implementation step, then call student_plan with action=add_step.",
 							},
+							true,
 						);
 					}
 
@@ -69,6 +56,7 @@ export function createStudentPlanExtension(workflow: WorkflowController): Extens
 					workflow.approveStudentPlan("The student reviewed and explicitly approved the implementation plan.");
 					return result("The student explicitly approved the implementation plan.", { plan: workflow.state.plan, approved: true, nextAction: "Call learning_state with the plan summary to advance." });
 				} catch (error) {
+					if (error instanceof ToolExecutionError) throw error;
 					return result(error instanceof Error ? error.message : String(error), { plan: workflow.state.plan, code: "STUDENT_PLAN_REJECTED", nextAction: "Call student_plan with action=status, then add or approve the plan as appropriate." }, true);
 				}
 			},

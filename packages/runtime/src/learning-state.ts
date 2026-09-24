@@ -1,68 +1,47 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import type { LearningStateUpdate } from "@pi-student/education/types";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
-
-const LearningStageSchema = Type.Union([
-	Type.Literal("understand"),
-	Type.Literal("UNDERSTAND"),
-	Type.Literal("plan"),
-	Type.Literal("PLAN"),
-	Type.Literal("implement"),
-	Type.Literal("IMPLEMENT"),
-	Type.Literal("review"),
-	Type.Literal("REVIEW"),
-	Type.Literal("verify"),
-	Type.Literal("VERIFY"),
-	Type.Literal("reflect"),
-	Type.Literal("REFLECT"),
-]);
+import { prepareLearningStateArguments } from "./tool-arguments.js";
+import { Type, type Static } from "typebox";
+import { toolResult } from "./tool-result.js";
 
 const LearningStateParams = Type.Object({
-	currentStage: LearningStageSchema,
 	readyForNextStage: Type.Boolean({ description: "Whether the current stage is complete and should advance" }),
 	goalSummary: Type.Optional(Type.String({ description: "Concise goal established during UNDERSTAND" })),
 	understandingReady: Type.Optional(Type.Boolean({ description: "Whether the requirements and intended outcome are sufficiently understood" })),
 	planSummary: Type.Optional(Type.String({ description: "Concise summary of the student-approved implementation plan" })),
-	studentApprovedPlan: Type.Optional(Type.Boolean({ description: "Must not be true; approval is recorded only by the student_plan interaction" })),
-	requestedNextStage: Type.Optional(LearningStageSchema),
+	reviewNeedsChanges: Type.Optional(Type.Boolean({ description: "During REVIEW, whether the findings require another implementation pass" })),
 	verificationStrategy: Type.Optional(Type.String({ description: "How the implementation will be verified" })),
 	verificationPassed: Type.Optional(Type.Boolean({ description: "Whether verification passed" })),
 	reflectionComplete: Type.Optional(Type.Boolean({ description: "Whether the student completed reflection" })),
 	reason: Type.String({ description: "Why the state update or transition is appropriate" }),
 });
 
-function result(text: string, details: unknown, isError = false) {
-	return {
-		content: [{ type: "text" as const, text }],
-		details,
-		...(isError ? { isError: true } : {}),
-	};
-}
-
 export function createLearningStateExtension(workflow: WorkflowController): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
 		pi.registerTool({
 			name: "learning_state",
 			label: "Learning stage",
-				description: "Record workflow progress. Stages are lowercase: understand, plan, implement, review, verify, reflect. Uppercase input is normalized safely.",
+			description: "Record progress for the current learning stage. The harness supplies the current stage and chooses the next stage; report only the evidence and stage-specific details.",
 			promptSnippet: "Report progress and advance the learning workflow when the current stage is complete.",
 			promptGuidelines: [
-				"Call learning_state whenever a stage becomes ready to advance; do not merely describe the transition in prose.",
+				"Call learning_state only after the required work in the current stage is complete.",
 				"In UNDERSTAND, include goalSummary and understandingReady=true once the goal is clear.",
-				"In PLAN, first record and obtain approval for student-authored steps with student_plan, then include planSummary.",
-				"In VERIFY, report verificationPassed explicitly. In REFLECT, report reflectionComplete explicitly.",
+				"In PLAN, first obtain explicit student approval through student_plan, then include planSummary.",
+				"In VERIFY, report verificationPassed explicitly. In REFLECT, report reflectionComplete=true only after the student reflects.",
 			],
 			parameters: LearningStateParams,
+			prepareArguments: (args) => prepareLearningStateArguments(args, workflow.getStage()) as Static<typeof LearningStateParams>,
 			executionMode: "sequential",
 			async execute(_toolCallId, params) {
 				const previousStage = workflow.getStage();
 				try {
+					const { reviewNeedsChanges, ...reportedProgress } = params;
 					const normalizedParams = {
-						...params,
-						currentStage: params.currentStage.toLowerCase() as LearningStateUpdate["currentStage"],
-						...(params.requestedNextStage ? { requestedNextStage: params.requestedNextStage.toLowerCase() as LearningStateUpdate["requestedNextStage"] } : {}),
+						...reportedProgress,
+						currentStage: previousStage,
+						...(previousStage === "review" && reviewNeedsChanges ? { requestedNextStage: "implement" as const } : {}),
 					};
 					workflow.updateLearningState(normalizedParams as LearningStateUpdate);
 					const currentStage = workflow.getStage();
@@ -73,9 +52,9 @@ export function createLearningStateExtension(workflow: WorkflowController): Exte
 						: currentStage === previousStage
 							? `Learning state updated; stage remains ${currentStage.toUpperCase()}.`
 							: `Learning stage advanced from ${previousStage.toUpperCase()} to ${currentStage.toUpperCase()}. Continue using the new stage and its active tools.`;
-					return result(text, { previousStage, currentStage, completed, state: workflow.getState() });
+					return toolResult(text, { previousStage, currentStage, completed, state: workflow.getState() });
 				} catch (error) {
-					return result(
+					return toolResult(
 						error instanceof Error ? error.message : String(error),
 						{
 							previousStage,

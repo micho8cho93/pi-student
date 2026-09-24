@@ -72,6 +72,8 @@ gitignored `.env.local`; Pi Student loads that file automatically.
 
 The publishable key is intended for public clients and is safe only in combination with the included grants and RLS. Never use `service_role`, a secret key, a database password, or an AI-provider key here.
 
+The browser teacher workspace has a Settings page for profile, appearance, class defaults, and class join controls. To enable its account deletion action, set `PI_STUDENT_SUPABASE_SERVICE_ROLE_KEY` only in the local teacher dashboard server process. This key must never be saved in `classroom.json` or sent to the browser. The server verifies the signed-in teacher and both confirmations, closes standalone classes, removes memberships and personal preferences, then asks Supabase Auth to soft-delete the account. The retained class projects and learning records keep their foreign keys. Sole active organization owners must transfer ownership or delete the organization first.
+
 In Supabase Auth:
 
 1. Add `http://127.0.0.1:4173/auth/callback` and the CLI callback pattern `http://127.0.0.1:*/auth/callback` to allowed redirect URLs for local development (use the exact deployed dashboard callback URL in production).
@@ -160,20 +162,22 @@ supabase --workdir infra test db
 
 ## Dashboard
 
-The dashboard is intentionally small and read-oriented:
+The browser dashboard has five teaching sections:
 
-1. **Classes** — create/open a class, see student counts and code state.
-2. **Daily activity** — active students, sessions, time, models, tokens, file counts, projects, assistance, and descriptive attention signals.
-3. **Student detail** — today/week/project views with goals, requirements, standards, decisions, blockers, usage, assistance, and reflection.
+1. **Classes** — create/open a class, manage join access, and edit project briefs and capabilities.
+2. **Students** — review each roster, approve or remove access, and open learning evidence.
+3. **Skills** and **MCPs** — narrow the school's approved extension inventory for a managed class or project. Teachers cannot import or approve an extension. Class restrictions apply to every project. The student runtime currently receives extension descriptors but does not execute their artifacts or MCP connections.
+4. **Usage** — view class or project session totals and, for a selected project, set per-session limits. Managed school limits are editable only when the organization delegates those paths; standalone project limits are teacher controlled. Known model gateway cost appears for managed classes when recorded.
 
-Project creation is conversational in both teacher surfaces. The terminal TUI's
-Projects → `new` flow and the browser Projects → Add project flow use the same Pi
-model credentials to ask clarifying questions and produce a structured brief with
-a goal, learning objectives, expectations, structure, constraints, success
-criteria, requirements, and any named standards. The browser builder endpoint
-accepts only an authenticated teacher's class, and the saved brief is the only
-project-conversation output persisted. Teachers can edit the saved brief manually
-later.
+The class overview still shows daily activity, and student detail still provides session evidence. Extension availability changes apply when a student next loads the project; session limits are checked after a model response and can be exceeded by that response.
+
+Project creation is teacher-authored in both surfaces. The terminal TUI's
+Projects → `new` flow and the browser Projects → Create project form capture the
+learning goal, subject, learner level, suggested duration, essential question,
+objectives, deliverables, milestones, constraints, resources, differentiation,
+assessment criteria, required components, standards, student focus reminders,
+and guidance for the student's AI. Teachers can edit the saved brief later; no
+teacher model connection is needed to create an assignment.
 
 When a student selects a project, Pi receives the full brief in its assignment
 context. If a student proposes a materially different project, the agent names

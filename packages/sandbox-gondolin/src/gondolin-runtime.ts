@@ -3,7 +3,7 @@ import type { SandboxConfig } from "@pi-student/contracts";
 import os from "node:os";
 import { constants as fsConstants } from "node:fs";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
-import { ensureGuestAssets, RealFSProvider, VM } from "@earendil-works/gondolin";
+import { createHttpHooks, ensureGuestAssets, RealFSProvider, VM } from "@earendil-works/gondolin";
 import {
 	SandboxExecutionError,
 	SandboxRuntimeError,
@@ -19,6 +19,7 @@ import {
 	type ResolvedSandboxRuntime,
 	type RuntimeResolutionOptions,
 } from "./runtime.js";
+import { isBlockedHostname, isBlockedRequest, normalizeBlockedHosts } from "./network-policy.js";
 
 const GUEST_ENV: Record<string, string> = {
 	HOME: "/root",
@@ -34,6 +35,7 @@ export class GondolinRuntime implements SandboxRuntime {
 	readonly mode = "gondolin" as const;
 	private internetAllowed = true;
 	private maxInternetAllowed = true;
+	private blockedHosts: string[] = [];
 	async configure(configuration: SandboxConfig): Promise<void> {
 		if (configuration.mode !== "gondolin") throw new SandboxRuntimeError("Managed configuration requires Gondolin", "gondolin");
 		if (configuration.profile) {
@@ -44,6 +46,7 @@ export class GondolinRuntime implements SandboxRuntime {
 		if (this.isRunning()) await this.stop();
 		this.maxInternetAllowed = configuration.internetAllowed ?? true;
 		this.internetAllowed = this.maxInternetAllowed;
+		this.blockedHosts = normalizeBlockedHosts(configuration.blockedHosts);
 	}
 	setInternetAllowed(allowed: boolean): void { this.internetAllowed = allowed && this.maxInternetAllowed; }
 	private vm?: VM;
@@ -109,8 +112,14 @@ export class GondolinRuntime implements SandboxRuntime {
 				} else {
 					sandbox = { vmm: "qemu", qemuPath: runtime.executablePath, imagePath: assets };
 				}
+				const { httpHooks } = createHttpHooks({
+					allowedHosts: ["*"],
+					blockInternalRanges: true,
+					isRequestAllowed: request => this.internetAllowed && !isBlockedRequest(request, this.blockedHosts),
+					isIpAllowed: info => this.internetAllowed && !isBlockedHostname(info.hostname, this.blockedHosts),
+				});
 				vm = await VM.create({
-					httpHooks: { isRequestAllowed: () => this.internetAllowed },
+					httpHooks,
 					sessionLabel: `pi-student ${path.basename(resolved)}`,
 					// RealFSProvider is the Gondolin VFS boundary: guest processes see only
 					// /workspace, while the host project is never used as their cwd.

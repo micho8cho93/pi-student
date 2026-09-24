@@ -1,14 +1,22 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FileCredentialStore, getAuthPath } from "./auth-storage.js";
 import { resolveThinkingLevel, type ThinkingModelCapabilities, type ThinkingLevel } from "@pi-student/policy/thinking";
+import { readOllamaUrl, registerOllama } from "./ollama.js";
 
 export async function createModelRuntime(): Promise<ModelRuntime> {
-	return ModelRuntime.create({
+	const runtime = await ModelRuntime.create({
 		// Keep the SDK's normal global location, but supply a durable store so
 		// onboarding writes are visible to the runtime and future invocations.
 		authPath: getAuthPath(),
 		credentials: new FileCredentialStore(),
 	});
+	const ollamaUrl = await readOllamaUrl();
+	if (ollamaUrl) {
+		// A stopped local server should not prevent a configured cloud provider from starting.
+		try { await registerOllama(runtime, ollamaUrl); }
+		catch { /* Setup can reconnect after Ollama starts or a model is pulled. */ }
+	}
+	return runtime;
 }
 
 export function findFallbackModel(runtime: ModelRuntime, current: { provider: string; id: string }, allowed: (model: ReturnType<ModelRuntime["getAvailableSnapshot"]>[number]) => boolean = () => true): ReturnType<ModelRuntime["getAvailableSnapshot"]>[number] | undefined {

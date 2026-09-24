@@ -6,8 +6,9 @@ in place. It creates no workspace, dashboard, navigation destination or chat.
 
 ## Usage
 
-- Click **Learn ○ / Learn ●** beside the existing thinking control. On compact
-  controls or models without reasoning, it sits beside the available controls.
+- Click **Learn ○ / Learn ●** after the thinking control. It is available in a
+  new workspace before the first prompt. On compact controls or models without
+  reasoning, it sits beside the available controls.
 - Ask “Teach me this codebase”, “Show the architecture”, “What starts at runtime?”,
   “Trace login”, or “Go deeper into this function”. Explanations and text diagrams
   appear in ordinary chat; source references use the existing file-link surface.
