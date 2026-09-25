@@ -1,6 +1,7 @@
 export * from "./engineering-concern.js";
 export * from "./extension.js";
 export * from "./intent.js";
+export * from "./learn-scaffolding.js";
 export * from "./learning-boundary.js";
 export * from "./project-context.js";
 export * from "./project-model.js";

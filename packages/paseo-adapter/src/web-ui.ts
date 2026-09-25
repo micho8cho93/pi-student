@@ -278,8 +278,8 @@ export const studentUiScript = (ecosystemPort: number) => `
             button.dataset.piStudentLearn = "true";
             button.dataset.agentId = agentId || "draft";
             button.dataset.testid = "pi-student-learn-toggle";
-            button.title = "Learn Mode: Explore and understand this codebase.";
-            button.setAttribute("aria-label", "Learn Mode: Explore and understand this codebase");
+            button.title = "Learn Mode: more explanation and hints in Chat, Code, Map and Terminal.";
+            button.setAttribute("aria-label", "Learn Mode: more explanation and hints in Chat, Code, Map and Terminal");
             // Reuse the native control's generated classes and inline layout styles.
             // Its text node is cloned separately so theme typography/color stay exact.
             button.className = anchor.className;
@@ -336,7 +336,7 @@ export const studentUiScript = (ecosystemPort: number) => `
                 const pending = sessionStorage.getItem("pi-student-learn-next");
                 const value = pending === null ? await request() : await request({ method: "POST", body: JSON.stringify({ learnMode: pending === "true" }) });
                 if (pending !== null) sessionStorage.removeItem("pi-student-learn-next");
-                if (before !== revision || busy) return; enabled = value; ready = true; button.title = "Learn Mode: Explore and understand this codebase.";
+                if (before !== revision || busy) return; enabled = value; ready = true; button.title = "Learn Mode: more explanation and hints in Chat, Code, Map and Terminal.";
               }
               catch (error) { if (before !== revision || busy) return; ready = false; button.title = error.message; }
               render();

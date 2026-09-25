@@ -1,22 +1,32 @@
 # Learn Mode
 
-Learn changes Pi's objective inside the existing conversation. The project,
-editor, terminal, sandbox, model, thinking level and implementation stage stay
-in place. It creates no workspace, dashboard, navigation destination or chat.
+Learn increases teaching scaffolding throughout the coding workspace. The project,
+editor, terminal, sandbox, model, thinking level, implementation stage, tools and
+permissions stay exactly as they are. It creates no workspace, dashboard,
+navigation destination or chat; it changes how existing surfaces help.
 
 ## Usage
 
 - Click **Learn ○ / Learn ●** after the thinking control. It is available in a
   new workspace before the first prompt. On compact controls or models without
   reasoning, it sits beside the available controls.
-- Ask “Teach me this codebase”, “Show the architecture”, “What starts at runtime?”,
-  “Trace login”, or “Go deeper into this function”. Explanations and text diagrams
-  appear in ordinary chat; source references use the existing file-link surface.
-- Learn permits inspection, not proactive edits. Switch it off for implementation.
+- Chat explains reasoning, prefers a hint or next step before a full implementation,
+  connects answers to the project's architecture, and builds on files the student
+  changed, selected code and the selected Flowchart step.
+- Flowchart (Map) shows each node's plain-language explanation and its incoming and
+  outgoing relationships. A selected node becomes Chat's learning focus. Node
+  explanations are generated with the map, so toggling Learn never regenerates it.
+- Editor autocomplete stays short in every mode. The editor has no separate
+  "explain this" action; selected code reaches Chat, which explains it step by step
+  in Learn.
+- Terminal: after a failed command or test, Chat explains the failure and asks for
+  the student's hypothesis before proposing a fix. The terminal itself is never
+  blocked or delayed.
 - In the terminal, `/learn`, `/learn on`, and `/learn off` change the same setting.
-- `/question [easy|medium|hard] [topic]` starts one repository-grounded question.
-  The next answer receives feedback, then the prior mode resumes. `/question off`
-  exits early. Learn itself never starts a question or requires an answer.
+- `/question [easy|medium|hard] [topic]` starts one practice question. Without a
+  topic it is about the student's current work (see below). The next answer
+  receives feedback, then the prior mode resumes. `/question off` exits early.
+  Learn itself never starts a question or requires an answer.
 
 Preferences persist across restarts for the same Pi session. A new conversation
 starts with Learn off. An in-flight response retains its mode; toggles affect the
@@ -31,17 +41,45 @@ next prompt. No prompt is sent merely by toggling Learn.
 session ID. Atomic file replacement prevents partially written preferences.
 No preferences or analysis files are written into the student's repository.
 
-`packages/education/src/extension.ts` synchronizes the setting before each agent request and
-before legacy question preparation. `LearningSession.learnMode` is the active
-turn's policy state. `LearningSession.question` holds explicit practice difficulty,
-topic and generation/answer phase. The workflow controller filters existing
-allowed inspection tools and exposes `codebase_model`, disabling editing,
-student questions, stage transitions, plans and exports while exploring. Existing
-sandbox, capability, model/provider and shell-policy checks remain active.
+`packages/education/src/extension.ts` synchronizes the setting before each agent
+request. `LEARN_GUIDANCE` is appended after the normal educational prompt and
+stage guidance; it never replaces them. With Learn on, the stage's tools are
+unchanged and the read-only `codebase_model` is added.
 
-The normal educational implementation prompt and question-preparation hook are
-skipped in Learn/question turns. Switching off restores the existing stage's
-tools; it never resets the workflow or changes the thinking setting.
+`LearningSession.question` holds explicit practice difficulty, topic and
+generation/answer phase. Only a `/question` turn narrows tools to inspection
+(`read`, `grep`, `find`, `ls`, safe-inspection `bash`, `codebase_model`) and
+replaces the workflow prompt; the question-preparation hook is skipped.
+
+### Scaffolding, not policy
+
+`resolveLearnScaffolding` (`packages/education/src/learn-scaffolding.ts`) is the
+single per-surface profile for Chat, Flowchart, Editor and Terminal. It depends
+only on Learn Mode and has no permission fields. `resolveStudentCapabilities`
+does not read Learn, so capabilities, workspace scope, sandbox and budgets are
+identical with Learn on or off.
+
+### Workspace continuity
+
+Learn state is mirrored into the workspace event stream (`learn.enabled`,
+`learn.disabled`, and the `learnMode` of each `chat.prompted`) and reduced into
+`WorkspaceUiState.learn`. The GUI toggle emits through the bridge; the chat
+runtime emits on changes and when it binds to a project. `/workspace-activity`
+returns the resolved `scaffolding`, so Code, Map and Terminal read the same
+profile as Chat. The stream is keyed per project, so Learn state never follows
+the student into another project.
+
+### `/question` context
+
+`buildQuestionWorkspaceContext` (`packages/runtime/src/question-workspace-context.ts`)
+replaces the general chat summary on a question-generation turn. It lists the
+learning stage, goal, student-authored plan steps, recent decisions, student-authored
+and other recent edits, the selected Flowchart component, selected code, and a
+recent failing test with a short redacted excerpt. It reads only the current
+project's stream, ignores activity older than four hours, omits credential-like
+paths and never includes file contents. The question prompt prefers a question
+about the consequence of the student's own change over a generic definition,
+refers to code by file and function, and never reproduces secrets.
 
 ### Codebase model
 

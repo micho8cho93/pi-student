@@ -2,11 +2,13 @@ import path from "node:path";
 import { isToolCallEventType, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { EffectiveStudentCapabilities, NextAvailableAction, WorkspaceEventInput, WorkspaceSurface } from "@pi-student/contracts";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
+import { resolveLearnScaffolding } from "@pi-student/education/learn-scaffolding";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import { FileTeacherContextStore, type TeacherContextStore } from "@pi-student/telemetry/local-store";
 import { formatAssistanceFallback, resolveNextAvailableActions } from "./assistance.js";
 import type { StudentCapabilityInputs } from "./student-workspace.js";
+import { buildQuestionWorkspaceContext } from "./question-workspace-context.js";
 import { buildWorkspaceChatContext } from "./workspace-chat-context.js";
 import { resolveWorkspaceEventScope, TEST_COMMAND, WorkspaceEventJournal, WorkspaceEventStream,
 	workspaceEventKey, type WorkspaceEventScope } from "./workspace-events.js";
@@ -56,6 +58,8 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		const changed = moved ? ["project"] : capabilities ? Object.keys(current).filter(key => current[key] !== capabilities![key]) : [];
 		capabilities = current;
 		if (changed.length) emit("runtime", { type: "capability.changed", changed });
+		// Tell Code, Map and Terminal which Learn setting this chat uses in this project. Never copied from the previous project.
+		if ((stream.ui(scope).learn?.enabled ?? false) !== learnMode) emit("learn", { type: learnMode ? "learn.enabled" : "learn.disabled" });
 	};
 	const actions = async (observed: Pick<StudentCapabilityInputs, "model" | "exhausted"> = {}) => {
 		const capabilities = await options.capabilities?.(observed).catch(() => undefined);
@@ -80,7 +84,12 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		pi.on("before_agent_start", async event => {
 			await bind();
 			// Build before recording this prompt, so "since the previous AI turn" ends here.
-			const summary = scope && buildWorkspaceChatContext({ ui: stream.ui(scope), events: stream.events(scope), actions: await actions() });
+			// A /question turn gets the student's current work instead, so the question is about what they are doing.
+			const question = workflow.state.question?.phase === "generate";
+			const state = workflow.state;
+			const summary = scope && (question
+				? buildQuestionWorkspaceContext({ ui: stream.ui(scope), stage: state.stage, goal: state.goal, plan: state.plan })
+				: buildWorkspaceChatContext({ ui: stream.ui(scope), events: stream.events(scope), actions: await actions(), learn: resolveLearnScaffolding(learnMode) }));
 			emit("chat", { type: "chat.prompted", learnMode });
 			return summary ? { systemPrompt: `${event.systemPrompt}\n\n${summary}` } : undefined;
 		});

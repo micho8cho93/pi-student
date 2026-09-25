@@ -18,14 +18,18 @@ never overwrites an existing Desktop file.
 
 ## Learn Mode
 
-Use **Learn ○ / Learn ●** beside the chat's thinking controls to explore the
-current codebase without leaving your workspace. Ask for an overview, an
-architecture diagram, a feature trace or an explanation of a particular file.
-Learn is read-oriented and does not quiz. Switching it off resumes the existing
-implementation workflow with the same conversation, model and thinking level.
+Use **Learn ○ / Learn ●** beside the chat's thinking controls to add teaching
+scaffolding across the workspace. Chat explains its reasoning, offers hints before
+full implementations, and ties answers to the project's architecture and your own
+changes. The Flowchart shows plain-language explanations and relationships, and a
+selected step becomes Chat's learning focus. After a failed command or test, Chat
+explains the failure before proposing a fix. Autocomplete stays short, and your
+terminal is never blocked. Learn changes how help is given, not what you or the
+agent may do.
 
-Terminal parity: `/learn [on|off]`. For separate active recall, use
-`/question [easy|medium|hard] [topic]`; `/question off` exits practice.
+Terminal parity: `/learn [on|off]`. For active recall, use
+`/question [easy|medium|hard] [topic]`; without a topic it asks about what you are
+working on right now. `/question off` exits practice.
 
 See [Learn Mode implementation and validation](docs/learn-mode.md) for the shared
 repository model, persistence, GUI integration, supported analysis and limitations.

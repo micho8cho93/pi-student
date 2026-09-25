@@ -108,6 +108,28 @@ describe("student flowchart", () => {
 		expect(graph.filesRead).toBe(2);
 	});
 
+	it("generates Learn explanations with the map, so toggling Learn only changes what is shown", () => {
+		const long = "word ".repeat(200);
+		const graph = parseFlowchartResponse(JSON.stringify({ title: "Chat", summary: "Flow", nodes: [
+			{ id: "connect", label: "Connect", detail: "Opens the socket", explanation: "  Opens the WebSocket.\nEverything after it\tdepends on this connection.  " },
+			{ id: "retry", label: "Retry", detail: "Schedules reconnects", explanation: long },
+			{ id: "done", label: "Done" },
+		], edges: [] }), 1, false);
+		expect(graph.nodes[0]).toMatchObject({ detail: "Opens the socket", explanation: "Opens the WebSocket. Everything after it depends on this connection." });
+		expect(graph.nodes[1]!.explanation!.length).toBeLessThanOrEqual(400);
+		expect(graph.nodes[2]).not.toHaveProperty("explanation");
+
+		const script = flowchartUiScript(6769);
+		expect(script).toContain("(state.learn && node.explanation) || node.detail");
+		expect(script).toContain('"Leads to "');
+		expect(script).toContain("Learn: Chat will explain from this step.");
+		// Learn arrives with workspace activity and re-renders the existing map; it never requests a new one.
+		const check = script.slice(script.indexOf("const checkStale"), script.indexOf("const ensurePanel"));
+		expect(check).toContain('activity.scaffolding?.flowchart?.detail === "educational"');
+		expect(check).toContain("render()");
+		expect(check).not.toMatch(/generate\(|\/flowchart\?/);
+	});
+
 	it("resolves a new workspace's selected project only through Paseo's registry", async () => {
 		const home = await mkdtemp(path.join(os.tmpdir(), "pi-flowchart-project-"));
 		try {

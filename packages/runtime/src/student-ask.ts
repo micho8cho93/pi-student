@@ -18,12 +18,12 @@ export function createStudentAskExtension(
 	loop = new StudentQuestionLoop(),
 	getContext: () => QuestionContext = () => ({ stage: "understand" }),
 	prepareContext?: (studentMessage: string) => Promise<Partial<QuestionContext>>,
-	isExploring: () => boolean = () => false,
+	isPracticingQuestion: () => boolean = () => false,
 ): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
 		let context = getContext();
 		pi.on("before_agent_start", async (event) => {
-			if (isExploring()) return;
+			if (isPracticingQuestion()) return;
 			const prepared = prepareContext ? await prepareContext(event.prompt) : {};
 			const nextContext = { ...getContext(), ...prepared };
 			const continuingStage = context.stage === nextContext.stage && context.intent === nextContext.intent;

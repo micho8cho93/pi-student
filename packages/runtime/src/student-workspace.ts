@@ -130,7 +130,7 @@ export function updateWorkspaceUi(workspace: StudentWorkspaceContext, patch: Par
 	return Object.freeze({ ...workspace, ui: normalizeUi(workspace.scope.projectPath, { ...workspace.ui, ...patch }) });
 }
 
-const uiKeys = new Set<string>(["activeFile", "openFiles", "selectedCode", "recentChanges", "terminal", "tests", "flowchart"]);
+const uiKeys = new Set<string>(["activeFile", "openFiles", "selectedCode", "recentChanges", "terminal", "tests", "flowchart", "learn"]);
 
 function normalizeUi(projectPath: string, ui: WorkspaceUiState): WorkspaceUiState {
 	const file = (value: string) => {

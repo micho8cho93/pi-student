@@ -115,6 +115,46 @@ export interface WorkspaceUiState {
 	tests?: { lastRun?: WorkspaceTestResult };
 	/** staleFiles: source files changed since the flowchart was generated. */
 	flowchart?: { generatedAt?: string; selectedNode?: FlowchartNodeSelection; stale: boolean; staleFiles?: string[] };
+	/**
+	 * Latest Learn Mode state reported in this workspace, so Code, Map and Terminal
+	 * follow the same setting as Chat. Scaffolding only; never a capability.
+	 */
+	learn?: { enabled: boolean; at: string };
+}
+
+/**
+ * How much teaching scaffolding each surface adds. Derived only from Learn Mode.
+ * It deliberately has no permission fields: Learn changes how help is given,
+ * never what the student or the agent may do.
+ */
+export interface LearnScaffolding {
+	enabled: boolean;
+	chat: {
+		explainReasoning: boolean;
+		/** Offer a hint or next step before writing a full implementation. */
+		hintsBeforeImplementation: boolean;
+		connectToArchitecture: boolean;
+		referenceStudentWork: boolean;
+	};
+	flowchart: {
+		/** Which node text to favor. Both are generated together, so toggling never regenerates the map. */
+		detail: "concise" | "educational";
+		explainRelationships: boolean;
+		/** A selected node becomes the focus of Chat's explanation. */
+		selectionIsLearningContext: boolean;
+	};
+	editor: {
+		/** Inline completion stays short in every mode. */
+		autocomplete: "concise";
+		/** How Chat treats code the student selected and asked about. */
+		explainSelection: "direct" | "educational";
+	};
+	terminal: {
+		/** Whether Chat explains a failed command or test before proposing a fix. */
+		onFailure: "fix" | "explain-first";
+		/** Learn never blocks or delays the student's own terminal. */
+		blocksCommands: false;
+	};
 }
 
 /** What the student is currently doing in this project. */

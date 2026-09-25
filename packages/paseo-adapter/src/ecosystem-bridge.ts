@@ -1,4 +1,5 @@
 import { LearnSettingsStore } from "@pi-student/education/settings";
+import { resolveLearnScaffolding } from "@pi-student/education/learn-scaffolding";
 import { resolveLearnSession } from "./paseo-session.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -180,7 +181,9 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				const scope = await eventScope(await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath));
 				await workspaceEvents.refresh(scope);
 				const latest = workspaceEvents.events(scope).filter(event => event.type === "capability.changed").at(-1);
-				return json(response, 200, { ...workspaceEvents.ui(scope), capabilityChangedAt: latest?.at });
+				const ui = workspaceEvents.ui(scope);
+				// One scaffolding profile for every GUI surface, so Code, Map and Terminal agree with Chat.
+				return json(response, 200, { ...ui, scaffolding: resolveLearnScaffolding(ui.learn?.enabled === true), capabilityChangedAt: latest?.at });
 			}
 			if (request.method === "GET" && url.pathname === "/workspace-actions") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
@@ -198,6 +201,11 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 					const body = await readBody(request) as { learnMode?: unknown };
 					if (typeof body.learnMode !== "boolean") return json(response, 400, { error: "learnMode must be a boolean." });
 					await settings.write(activeProject, sessionId, body.learnMode);
+					// Mirror the toggle into this project's workspace only. Learn is scaffolding, so capabilities are untouched.
+					try {
+						workspaceEvents.emit(await eventScope(activeProject), "learn", { type: body.learnMode ? "learn.enabled" : "learn.disabled" });
+						await eventJournal.flush();
+					} catch { /* Activity is best-effort; the setting itself is saved. */ }
 				}
 				return json(response, 200, { learnMode: await settings.read(activeProject, sessionId) });
 			}

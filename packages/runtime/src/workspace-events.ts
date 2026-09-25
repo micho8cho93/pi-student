@@ -236,6 +236,11 @@ export function reduceWorkspaceUi(ui: WorkspaceUiState, event: WorkspaceEvent): 
 			return { ui: { ...ui, flowchart }, stale: [] };
 		}
 		case "flowchart.generated": return { ui: { ...ui, flowchart: { generatedAt: event.at, stale: false } }, stale: [] };
+		// Every chat prompt restates Learn, so Code, Map and Terminal converge on the setting Chat actually used.
+		case "learn.enabled": case "learn.disabled": case "chat.prompted": {
+			const enabled = event.type === "chat.prompted" ? event.learnMode : event.type === "learn.enabled";
+			return ui.learn?.enabled === enabled ? { ui, stale: [] } : { ui: { ...ui, learn: { enabled, at: event.at } }, stale: [] };
+		}
 		case "flowchart.stale": return ui.flowchart?.generatedAt
 			? { ui: { ...ui, flowchart: { ...ui.flowchart, stale: true, staleFiles: [...new Set([...(ui.flowchart.staleFiles ?? []), ...event.files])].slice(0, MAX_FILES) } }, stale: [] }
 			: { ui, stale: [] };

@@ -35,7 +35,11 @@ export class WorkflowController {
 		private readonly policy: ToolPolicy = toolPolicy,
 	) {}
 
-	isExploring(): boolean { return this.state.learnMode === true || !!this.state.question; }
+	/**
+	 * Explicit /question practice is a read-only turn. Learn Mode is not: it adds
+	 * teaching scaffolding but leaves the stage's tools and permissions unchanged.
+	 */
+	isPracticingQuestion(): boolean { return !!this.state.question; }
 
 	setLearnMode(enabled: boolean): void {
 		if (this.state.learnMode === enabled) return;
@@ -64,8 +68,12 @@ export class WorkflowController {
 	}
 
 	getAllowedTools(): readonly string[] {
-		if (!this.isExploring()) return this.policy.allowedTools(this.state.stage);
-		return [...this.policy.allowedTools(this.state.stage).filter(tool => ["read", "grep", "find", "ls", "bash"].includes(tool) && this.policy.canUseTool(this.state.stage, tool)), "codebase_model"];
+		if (this.isPracticingQuestion()) {
+			return [...this.policy.allowedTools(this.state.stage).filter(tool => ["read", "grep", "find", "ls", "bash"].includes(tool) && this.policy.canUseTool(this.state.stage, tool)), "codebase_model"];
+		}
+		const allowed = this.policy.allowedTools(this.state.stage);
+		// The read-only repository model helps Learn connect answers to the architecture; it grants no new access.
+		return this.state.learnMode && allowed.includes("read") ? [...allowed, "codebase_model"] : allowed;
 	}
 
 	getRegisteredTools(): readonly string[] {
@@ -82,7 +90,8 @@ export class WorkflowController {
 	}
 
 	canUseTool(toolName: string): boolean {
-		return this.isExploring() ? this.getAllowedTools().includes(toolName) : this.policy.canUseTool(this.state.stage, toolName);
+		if (this.isPracticingQuestion() || toolName === "codebase_model") return this.getAllowedTools().includes(toolName);
+		return this.policy.canUseTool(this.state.stage, toolName);
 	}
 
 	addStudentPlanStep(description: string): void {

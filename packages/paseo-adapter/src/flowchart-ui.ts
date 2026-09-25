@@ -5,7 +5,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
     (() => {
       const api = "http://127.0.0.1:${ecosystemPort}";
       const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null, stale: false,
-        staleFiles: [], selected: null, activeFile: null, fallback: null, shapes: new Map() };
+        staleFiles: [], selected: null, activeFile: null, fallback: null, learn: false, shapes: new Map() };
       const svgNs = "http://www.w3.org/2000/svg";
       const el = (tag, className, label) => {
         const node = document.createElement(tag);
@@ -28,6 +28,13 @@ export const flowchartUiScript = (ecosystemPort: number) => `
       const relatesToOpenFile = node => nodeFiles(node).some(file => sameFile(state.activeFile, file));
       const nodeIsStale = node => nodeFiles(node).some(file => state.staleFiles.includes(file));
       const sourceLabel = node => node.file ? node.file + (node.line ? ":" + node.line : "") + (node.symbol ? " · " + node.symbol : "") : "";
+      // Learn favors the plain-language explanation; both texts arrive with the same map, so switching never regenerates.
+      const nodeDetail = node => (state.learn && node.explanation) || node.detail || "";
+      const nodeName = id => state.graph?.nodes.find(item => item.id === id)?.label || id;
+      const relationships = node => [
+        ...state.graph.edges.filter(edge => edge.to === node.id).map(edge => "Comes after " + nodeName(edge.from) + (edge.label ? " (" + edge.label + ")" : "")),
+        ...state.graph.edges.filter(edge => edge.from === node.id).map(edge => "Leads to " + nodeName(edge.to) + (edge.label ? " (" + edge.label + ")" : ""))
+      ].slice(0, 6);
       // Paseo opens a workspace file from ?open=file:<base64url path>; it reads the parameter on navigation.
       const openFile = file => {
         if (!state.workspaceId || !file) return;
@@ -67,6 +74,13 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         bar.hidden = !node;
         if (!node) return;
         bar.append(el("strong", "", node.label), el("span", "", node.file ? sourceLabel(node) : "Not linked to a specific file"));
+        if (state.learn) {
+          const learn = el("div", "learn-note");
+          if (node.explanation) learn.append(el("p", "", node.explanation));
+          const links = relationships(node);
+          if (links.length) { const list = el("ul"); links.forEach(item => list.append(el("li", "", item))); learn.append(list); }
+          if (learn.childNodes.length) bar.append(learn);
+        }
         if (nodeIsStale(node)) bar.append(el("span", "stale-note", "Code changed since this map was generated"));
         if (node.file) {
           const open = el("button", "", "Open code");
@@ -75,7 +89,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         }
         const clear = el("button", "secondary", "Clear");
         clear.addEventListener("click", () => selectNode(null));
-        bar.append(clear, el("span", "hint", "Chat can see the selected step."));
+        bar.append(clear, el("span", "hint", state.learn ? "Learn: Chat will explain from this step." : "Chat can see the selected step."));
       };
       const fallbackList = () => {
         if (!state.fallback?.canStill?.length) return null;
@@ -312,12 +326,12 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           group.addEventListener("keydown", event => {
             if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (state.selected === node.id && node.file) openFile(node.file); else selectNode(node); }
           });
-          const title = svgEl("title"); title.textContent = (node.detail ? node.label + ". " + node.detail : node.label) + " — " + type + (node.file ? " — " + sourceLabel(node) + ". Double-click to open the code." : ""); group.appendChild(title);
+          const title = svgEl("title"); title.textContent = (nodeDetail(node) ? node.label + ". " + nodeDetail(node) : node.label) + " — " + type + (node.file ? " — " + sourceLabel(node) + ". Double-click to open the code." : ""); group.appendChild(title);
           const typeTag = svgEl("text", { x: position.x + nodeWidth / 2, y: position.y + 24, "text-anchor": "middle", "dominant-baseline": "middle", fill: color.text, "font-size": 10, "font-weight": 700, "letter-spacing": 1 });
           typeTag.textContent = type.toUpperCase(); group.appendChild(typeTag);
           const labelLines = wrap(node.label, type === "decision" ? 18 : 25, 2);
           labelLines.forEach((line, lineIndex) => { const text = svgEl("text", { x: position.x + nodeWidth / 2, y: position.y + 59 + (lineIndex - (labelLines.length - 1) / 2) * 17, "text-anchor": "middle", "dominant-baseline": "middle", fill: "#f5f8fb", "font-size": 14, "font-weight": 650 }); text.textContent = line; group.appendChild(text); });
-          const detailLines = wrap(node.detail || "", type === "decision" ? 14 : 31, 2);
+          const detailLines = wrap(nodeDetail(node), type === "decision" ? 14 : 31, 2);
           detailLines.forEach((line, lineIndex) => { const text = svgEl("text", { x: position.x + nodeWidth / 2, y: position.y + 96 + lineIndex * 14, "text-anchor": "middle", "dominant-baseline": "middle", fill: "#bacbd3", "font-size": 11.5 }); text.textContent = line; group.appendChild(text); });
           diagram.appendChild(group);
         });
@@ -397,9 +411,12 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           const activity = await response.json();
           if (!response.ok) return;
           const staleFiles = activity.flowchart?.staleFiles || [];
-          if (Boolean(activity.flowchart?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|")) {
+          const learn = activity.scaffolding?.flowchart?.detail === "educational";
+          if (Boolean(activity.flowchart?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|") || learn !== state.learn) {
             state.stale = Boolean(activity.flowchart?.stale);
             state.staleFiles = staleFiles;
+            state.learn = learn;
+            // Re-render the existing map; Learn changes presentation only.
             if (!state.loading) render();
           }
         } catch { /* Staleness is advisory. */ }
@@ -408,7 +425,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         if (root()) return;
         const panel = el("section"); panel.id = "pi-student-flowchart";
         panel.setAttribute("aria-label", "Application flowchart");
-        panel.innerHTML = '<style>#pi-student-flowchart{position:fixed;z-index:9;box-sizing:border-box;display:none;flex-direction:column;background:#181b1a;color:#e9f0f2;border-top:1px solid #3e4748;font-size:14px}#pi-student-flowchart *{box-sizing:border-box}#pi-student-flowchart .head{display:flex;align-items:center;gap:16px;padding:17px 24px;border-bottom:1px solid #344044;flex-wrap:wrap}#pi-student-flowchart .heading{flex:1;min-width:230px}#pi-student-flowchart h2{font-size:20px;line-height:1.25;margin:0 0 4px}#pi-student-flowchart .flow-summary{color:#9db0b8;line-height:1.4}#pi-student-flowchart .badge{border:1px solid #567887;border-radius:99px;padding:4px 9px;color:#b7d5e1;font-size:12px}#pi-student-flowchart button{font:inherit;color:inherit;background:#26363b;border:1px solid #5a7179;border-radius:8px;padding:7px 11px;cursor:pointer}#pi-student-flowchart button:hover{background:#34505a}#pi-student-flowchart button:disabled{opacity:.5;cursor:default}#pi-student-flowchart button:focus-visible{outline:2px solid #86d2ec;outline-offset:2px}#pi-student-flowchart .zoom-controls{display:flex;gap:6px}#pi-student-flowchart .flow-content{display:flex;flex:1;min-height:0;flex-direction:column}#pi-student-flowchart .canvas{flex:1;min-height:0;overflow:hidden;background-color:#1c2427;background-image:radial-gradient(#3b515b 1px,transparent 1px);background-size:22px 22px;cursor:grab}#pi-student-flowchart .canvas:active{cursor:grabbing}#pi-student-flowchart .meta{padding:9px 24px;color:#8fa2aa;border-top:1px solid #344044;font-size:12px}#pi-student-flowchart .loading,#pi-student-flowchart .error{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:15px;text-align:center;padding:24px;color:#a9bdc4}#pi-student-flowchart .loading strong,#pi-student-flowchart .error strong{color:#edf5f6;font-size:20px}#pi-student-flowchart .spinner{width:54px;height:54px;border:4px solid #3a525c;border-top-color:#7bd3ef;border-radius:50%;animation:pi-flow-spin .85s linear infinite;box-shadow:0 0 28px #2e718855}@keyframes pi-flow-spin{to{transform:rotate(360deg)}}#pi-student-flowchart .selection{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 24px;border-top:1px solid #344044;background:#1f2a2e}#pi-student-flowchart .selection[hidden]{display:none}#pi-student-flowchart .selection span{color:#a9bdc4}#pi-student-flowchart .selection .hint{margin-left:auto;font-size:12px}#pi-student-flowchart .stale-note{color:#f4c15d!important}#pi-student-flowchart .refresh-error{padding:9px 24px;border-bottom:1px solid #6b4a2a;background:#3a2c1e;color:#ffe3a2}#pi-student-flowchart .fallback ul{margin:4px 0 0;padding-left:18px;text-align:left}[data-pi-student-flowchart-tab]{display:inline-flex;align-items:center;gap:8px;flex:none;height:31px;max-width:180px;padding:0 9px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer}[data-pi-student-flowchart-tab].active{background:rgba(127,127,127,.18)}[data-pi-student-flowchart-tab] .close{font-size:16px;line-height:1;opacity:.6;padding:2px}[data-pi-student-flowchart-tab] .close:hover{opacity:1}</style><div class="head"><button type="button" class="back" hidden>← Back</button><div class="heading"><h2 class="flow-title">Application flowchart</h2><div class="flow-summary">See how the parts of this project fit together.</div></div><span class="badge">Read-only</span><div class="zoom-controls" hidden><button type="button" class="zoom-out" aria-label="Zoom out">−</button><button type="button" class="zoom-in" aria-label="Zoom in">+</button><button type="button" class="fit">Fit</button></div><button type="button" class="refresh">↻ Refresh</button></div><div class="flow-content"></div>';
+        panel.innerHTML = '<style>#pi-student-flowchart{position:fixed;z-index:9;box-sizing:border-box;display:none;flex-direction:column;background:#181b1a;color:#e9f0f2;border-top:1px solid #3e4748;font-size:14px}#pi-student-flowchart *{box-sizing:border-box}#pi-student-flowchart .head{display:flex;align-items:center;gap:16px;padding:17px 24px;border-bottom:1px solid #344044;flex-wrap:wrap}#pi-student-flowchart .heading{flex:1;min-width:230px}#pi-student-flowchart h2{font-size:20px;line-height:1.25;margin:0 0 4px}#pi-student-flowchart .flow-summary{color:#9db0b8;line-height:1.4}#pi-student-flowchart .badge{border:1px solid #567887;border-radius:99px;padding:4px 9px;color:#b7d5e1;font-size:12px}#pi-student-flowchart button{font:inherit;color:inherit;background:#26363b;border:1px solid #5a7179;border-radius:8px;padding:7px 11px;cursor:pointer}#pi-student-flowchart button:hover{background:#34505a}#pi-student-flowchart button:disabled{opacity:.5;cursor:default}#pi-student-flowchart button:focus-visible{outline:2px solid #86d2ec;outline-offset:2px}#pi-student-flowchart .zoom-controls{display:flex;gap:6px}#pi-student-flowchart .flow-content{display:flex;flex:1;min-height:0;flex-direction:column}#pi-student-flowchart .canvas{flex:1;min-height:0;overflow:hidden;background-color:#1c2427;background-image:radial-gradient(#3b515b 1px,transparent 1px);background-size:22px 22px;cursor:grab}#pi-student-flowchart .canvas:active{cursor:grabbing}#pi-student-flowchart .meta{padding:9px 24px;color:#8fa2aa;border-top:1px solid #344044;font-size:12px}#pi-student-flowchart .loading,#pi-student-flowchart .error{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:15px;text-align:center;padding:24px;color:#a9bdc4}#pi-student-flowchart .loading strong,#pi-student-flowchart .error strong{color:#edf5f6;font-size:20px}#pi-student-flowchart .spinner{width:54px;height:54px;border:4px solid #3a525c;border-top-color:#7bd3ef;border-radius:50%;animation:pi-flow-spin .85s linear infinite;box-shadow:0 0 28px #2e718855}@keyframes pi-flow-spin{to{transform:rotate(360deg)}}#pi-student-flowchart .selection{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 24px;border-top:1px solid #344044;background:#1f2a2e}#pi-student-flowchart .selection[hidden]{display:none}#pi-student-flowchart .selection span{color:#a9bdc4}#pi-student-flowchart .selection .hint{margin-left:auto;font-size:12px}#pi-student-flowchart .stale-note{color:#f4c15d!important}#pi-student-flowchart .learn-note{flex-basis:100%;order:10;color:#d7e6ea;line-height:1.45}#pi-student-flowchart .learn-note p{margin:0 0 4px}#pi-student-flowchart .learn-note ul{margin:0;padding-left:18px;color:#a9bdc4;font-size:13px}#pi-student-flowchart .refresh-error{padding:9px 24px;border-bottom:1px solid #6b4a2a;background:#3a2c1e;color:#ffe3a2}#pi-student-flowchart .fallback ul{margin:4px 0 0;padding-left:18px;text-align:left}[data-pi-student-flowchart-tab]{display:inline-flex;align-items:center;gap:8px;flex:none;height:31px;max-width:180px;padding:0 9px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer}[data-pi-student-flowchart-tab].active{background:rgba(127,127,127,.18)}[data-pi-student-flowchart-tab] .close{font-size:16px;line-height:1;opacity:.6;padding:2px}[data-pi-student-flowchart-tab] .close:hover{opacity:1}</style><div class="head"><button type="button" class="back" hidden>← Back</button><div class="heading"><h2 class="flow-title">Application flowchart</h2><div class="flow-summary">See how the parts of this project fit together.</div></div><span class="badge">Read-only</span><div class="zoom-controls" hidden><button type="button" class="zoom-out" aria-label="Zoom out">−</button><button type="button" class="zoom-in" aria-label="Zoom in">+</button><button type="button" class="fit">Fit</button></div><button type="button" class="refresh">↻ Refresh</button></div><div class="flow-content"></div>';
         document.body.appendChild(panel);
         panel.querySelector(".back").addEventListener("click", close);
         panel.querySelector(".refresh").addEventListener("click", generate);

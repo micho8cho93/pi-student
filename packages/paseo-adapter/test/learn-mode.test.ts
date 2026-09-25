@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { CodebaseModel, relationshipDiagram } from "@pi-student/education/project-model";
 import { LearnSettingsStore } from "@pi-student/education/settings";
-import { parseQuestion, registerLearnMode, LEARN_GUIDANCE } from "@pi-student/education/extension";
+import { CURRENT_WORK_TOPIC, parseQuestion, registerLearnMode, LEARN_GUIDANCE } from "@pi-student/education/extension";
 import { resolveLearnSession } from "@pi-student/paseo-adapter/paseo-session";
 import { HostRuntime } from "@pi-student/sandbox-gondolin/host-runtime";
 import { WorkflowController } from "@pi-student/education/workflow-controller";
@@ -76,14 +76,18 @@ describe("shared codebase model", () => {
 });
 
 describe("mode policy and persistence", () => {
-	it("keeps the workflow, chat and stage while removing implementation and question tools", () => {
+	it("keeps the workflow, chat, stage and tools in Learn, and narrows tools only for /question practice", () => {
 		const workflow = new WorkflowController(createLearningSession("/project", "00000000-0000-0000-0000-000000000001"));
 		workflow.state.stage = "implement";
 		const state = workflow.state;
 		workflow.setLearnMode(true);
 		expect(workflow.getAllowedTools()).toContain("codebase_model");
+		for (const tool of ["write", "edit", "bash", "student_ask", "learning_state"]) expect(workflow.canUseTool(tool)).toBe(true);
+		workflow.setQuestion({ difficulty: "medium", topic: CURRENT_WORK_TOPIC, phase: "generate" });
 		for (const tool of ["write", "edit", "student_ask", "student_plan", "learning_state", "save_to_desktop"]) expect(workflow.canUseTool(tool)).toBe(false);
+		workflow.setQuestion(undefined);
 		workflow.setLearnMode(false);
+		expect(workflow.canUseTool("codebase_model")).toBe(false);
 		expect(workflow.state).toBe(state);
 		expect(workflow.state.id).toBe("00000000-0000-0000-0000-000000000001");
 		expect(workflow.getStage()).toBe("implement");
@@ -92,6 +96,9 @@ describe("mode policy and persistence", () => {
 	it("preserves tighter custom inspection policies", () => {
 		const workflow = new WorkflowController(createLearningSession("/project"), { registeredTools: () => ["read"], allowedTools: () => ["read"], canUseTool: (_stage, tool) => tool === "read" });
 		workflow.setLearnMode(true);
+		expect(workflow.canUseTool("bash")).toBe(false);
+		expect(workflow.getAllowedTools()).toEqual(["read", "codebase_model"]);
+		workflow.setQuestion({ difficulty: "easy", topic: "runtime", phase: "generate" });
 		expect(workflow.canUseTool("bash")).toBe(false);
 		expect(workflow.getAllowedTools()).toEqual(["read", "codebase_model"]);
 	});
@@ -108,7 +115,7 @@ describe("mode policy and persistence", () => {
 	});
 	it("defaults to medium without losing an unspecified topic", () => {
 		expect(parseQuestion("runtime")).toEqual({ difficulty: "medium", topic: "runtime" });
-		expect(parseQuestion("")).toEqual({ difficulty: "medium", topic: "whole project" });
+		expect(parseQuestion("")).toEqual({ difficulty: "medium", topic: CURRENT_WORK_TOPIC });
 	});
 	it("TUI command shares GUI settings, keeps thinking independent, and evaluates only explicit practice", async () => {
 		const { root, runtime } = await fixture({ "main.py": "print('hello')" });
@@ -122,23 +129,28 @@ describe("mode policy and persistence", () => {
 		await emit("session_start");
 		await commands.get("learn").handler("", ctx);
 		expect(await store.read(root, "session")).toBe(true);
-		expect(mode.guidance()).toBe(LEARN_GUIDANCE);
+		expect(mode.learnGuidance()).toBe(LEARN_GUIDANCE);
+		expect(mode.questionGuidance()).toBeUndefined();
 		expect(pi.setThinkingLevel).not.toHaveBeenCalled();
 		const model = await mode.codebase.get();
 		await commands.get("question").handler("hard runtime", ctx);
 		await emit("before_agent_start");
-		expect(mode.guidance()).toContain("Ask exactly one");
+		expect(mode.questionGuidance()).toContain("Ask exactly one");
+		expect(mode.questionGuidance()).toContain("current work");
+		expect(mode.questionGuidance()).toContain("never reproduce secrets");
+		// Learn scaffolding steps aside while a practice question is running.
+		expect(mode.learnGuidance()).toBeUndefined();
 		expect(await mode.codebase.get()).toBe(model);
 		await emit("agent_settled");
 		expect(workflow.state.question?.phase).toBe("answer");
 		await emit("before_agent_start");
-		expect(mode.guidance()).toContain("Evaluate the student's answer");
+		expect(mode.questionGuidance()).toContain("Evaluate the student's answer");
 		await emit("agent_settled");
 		expect(workflow.state.question).toBeUndefined();
-		expect(mode.guidance()).toBe(LEARN_GUIDANCE);
+		expect(mode.learnGuidance()).toBe(LEARN_GUIDANCE);
 		// Simulate GUI setting change. Applies to the next turn, never a new session.
 		await store.write(root, "session", false); await emit("before_agent_start");
-		expect(mode.guidance()).toBeUndefined();
+		expect(mode.learnGuidance()).toBeUndefined();
 	});
 	it("rejects cross-project and non-Pi GUI session lookups", async () => {
 		const home = await directory(); const project = "/tmp/example";

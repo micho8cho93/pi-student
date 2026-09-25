@@ -282,7 +282,7 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 			questionLoop,
 			() => ({ stage: workflow.getStage(), intent: activeRoute?.intent, projectContext: activeProjectContext }),
 			prepareRoutingContext,
-			() => workflow.isExploring(),
+			() => workflow.isPracticingQuestion(),
 		)(pi);
 		createLearningStateExtension(workflow)(pi);
 		createStudentPlanExtension(workflow)(pi);
@@ -368,10 +368,12 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 		pi.on("agent_settled", async (_event, ctx) => finishProgress(ctx));
 		pi.on("before_agent_start", async (event, ctx) => {
 			showProgress(ctx, LEARNING_CUES[1]);
-			const guidance = exploration.guidance();
-			if (guidance) return { systemPrompt: `${event.systemPrompt}\n${SANDBOX_SYSTEM_PROMPT}\n${guidance}` };
+			const question = exploration.questionGuidance();
+			if (question) return { systemPrompt: `${event.systemPrompt}\n${SANDBOX_SYSTEM_PROMPT}\n${question}` };
+			// Learn adds scaffolding after the stage guidance; it never replaces the workflow or its tool rules.
+			const learn = exploration.learnGuidance();
 			return {
-					systemPrompt: `${event.systemPrompt}\n\n${SANDBOX_SYSTEM_PROMPT}\n${capabilityState(workflow).settings.reflection ? EDUCATIONAL_SYSTEM_PROMPT : EDUCATIONAL_SYSTEM_PROMPT.replace("Require a review of changes before verification and reflection before completion.", "Require a review of changes before verification. Reflection is disabled for this project; do not request it.")}\n${stageGuidance(workflow.getStage(), workflow.getIntent())}`,
+					systemPrompt: `${event.systemPrompt}\n\n${SANDBOX_SYSTEM_PROMPT}\n${capabilityState(workflow).settings.reflection ? EDUCATIONAL_SYSTEM_PROMPT : EDUCATIONAL_SYSTEM_PROMPT.replace("Require a review of changes before verification and reflection before completion.", "Require a review of changes before verification. Reflection is disabled for this project; do not request it.")}\n${stageGuidance(workflow.getStage(), workflow.getIntent())}${learn ? `\n\n${learn}` : ""}`,
 			};
 		});
 		pi.on("session_shutdown", async () => {
@@ -702,7 +704,7 @@ function registerStudentRuntimeGuards(pi: ExtensionAPI, workflow: WorkflowContro
 		}
 		if (!isToolCallEventType("bash", event)) return undefined;
 		const command = event.input.command;
-		if (workflow.isExploring() && !isSafeInspectionCommand(command, ctx.cwd)) return { block: true, reason: "Learn and question practice allow only read-only inspection. Switch Learn off before implementation." };
+		if (workflow.isPracticingQuestion() && !isSafeInspectionCommand(command, ctx.cwd)) return { block: true, reason: "Question practice allows only read-only inspection. Finish the question or use /question off before implementation." };
 		const classification = classifyTerminalCommand(command, ctx.cwd);
 
 		if (classification === "student-checkpoint") {
