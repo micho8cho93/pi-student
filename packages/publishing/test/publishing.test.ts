@@ -9,7 +9,6 @@ import { GitRunner, type CommandExecutor } from "@pi-student/publishing/git-runn
 import { PublishingMetadataStore } from "@pi-student/publishing/metadata-store";
 import { parseGitHubRemote, PublishingService } from "@pi-student/publishing/publishing-service";
 import { sanitizeRepositoryName, scanPublishableFiles } from "@pi-student/publishing/security";
-import { ECOSYSTEM_BRIDGE_PORT, resolvePaseoWorkspacePath } from "@pi-student/paseo-adapter/ecosystem-bridge";
 import { GhGitHubClient } from "@pi-student/publishing/github-client";
 import type { GitHubClient, GitHubConnection, GitHubPagesStatus, RepositorySummary } from "@pi-student/publishing/types";
 
@@ -188,23 +187,6 @@ describe("publishing helpers", () => {
 		expect(sanitizeRepositoryName("My Café Website!" )).toBe("my-cafe-website");
 		expect(parseGitHubRemote("git@github.com:alex/portfolio.git")).toEqual({ owner: "alex", repo: "portfolio" });
 		expect(parseGitHubRemote("https://gitlab.com/alex/portfolio.git")).toBeUndefined();
-	});
-
-	it("uses one local bridge and resolves only registered Paseo workspace ids", async () => {
-		const root = await mkdtemp(path.join(os.tmpdir(), "pi-paseo-workspaces-"));
-		const paseoHome = path.join(root, "paseo");
-		const project = path.join(root, "student-site");
-		try {
-			await mkdir(path.join(paseoHome, "projects"), { recursive: true });
-			await writeFile(path.join(paseoHome, "projects", "workspaces.json"), JSON.stringify([
-				{ workspaceId: "wks_student-1", cwd: project },
-			]));
-			expect(ECOSYSTEM_BRIDGE_PORT).toBe(6769);
-			expect(await resolvePaseoWorkspacePath(paseoHome, "wks_student-1", "/fallback")).toBe(project);
-			expect(await resolvePaseoWorkspacePath(paseoHome, undefined, "/fallback")).toBe("/fallback");
-			await expect(resolvePaseoWorkspacePath(paseoHome, "../../etc", "/fallback")).rejects.toThrow(/identifier is invalid/);
-			await expect(resolvePaseoWorkspacePath(paseoHome, "wks_missing", "/fallback")).rejects.toThrow(/active Paseo workspace/);
-		} finally { await rm(root, { recursive: true, force: true }); }
 	});
 
 	it("reports tracked sensitive files", async () => {

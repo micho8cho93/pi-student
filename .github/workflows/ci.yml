@@ -1,45 +1,23 @@
-name: CI Core
+name: CI
+
+# Required gate for every PR and every push to main. No path filters: a
+# skipped workflow reports no check, so branch protection could not require it.
 
 on:
   push:
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "tooling/**"
-      - "package.json"
-      - "package-lock.json"
-      - "turbo.json"
-      - "tsconfig.json"
-      - ".github/workflows/ci*.yml"
+    branches: [main]
   pull_request:
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "tooling/**"
-      - "package.json"
-      - "package-lock.json"
-      - "turbo.json"
-      - "tsconfig.json"
-      - ".github/workflows/ci*.yml"
   workflow_dispatch:
 
-jobs:
-  affected:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.3.0
-          cache: npm
-      - run: npm ci
-      - run: npm run test:architecture
-      - run: npm run ci:affected
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-  full-fallback:
-    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+permissions:
+  contents: read
+
+jobs:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,5 +27,122 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      # turbo builds only declared dependencies before each package's tests,
+      # so an undeclared cross-package import fails here instead of passing
+      # on a warm cache.
+      - run: npx turbo run test
+
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run test:architecture
+      - run: npm run check:boundaries
+      - run: npm run check:versions
+
+  supabase:
+    name: supabase / rls
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npm run infra:start
+      - run: npm run infra:reset
+      - run: npm run infra:lint
+      - run: npm run infra:test
+      - if: always()
+        run: npx supabase stop --workdir infra/supabase --no-backup
+
+  sandbox:
+    name: sandbox / network
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npx turbo run build test --filter=@pi-student/sandbox --filter=@pi-student/sandbox-gondolin
+      - name: Install QEMU fallback
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: Boot sandbox and execute smoke command
+        env:
+          PI_STUDENT_HOME: ${{ runner.temp }}/pi-student
+          XDG_CACHE_HOME: ${{ runner.temp }}/pi-student/cache
+        run: npm run test:sandbox
+
+  student-runtime:
+    name: student runtime integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npx turbo run build test --filter=@pi-student/runtime --filter=@pi-student/client
+      - name: Verify client release boundary
+        run: npm run package:client -- linux-x64 apps/client/artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-boundary-linux-x64
+          path: apps/client/artifacts/*.tar.gz
+          retention-days: 3
+
+  paseo:
+    name: paseo workspace integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.3.0
+          cache: npm
+      - run: npm ci
+      - run: npx turbo run build test --filter=@pi-student/paseo-adapter --filter=@pi-student/publishing
+
+  # Single stable check name to mark as required in branch protection.
+  ci-passed:
+    if: always()
+    needs: [build, typecheck, unit, architecture, supabase, sandbox, student-runtime, paseo]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "All CI jobs passed"
