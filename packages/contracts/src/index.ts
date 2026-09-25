@@ -4,3 +4,4 @@ export * from "./policy.js";
 export * from "./runtime.js";
 export * from "./sandbox.js";
 export * from "./telemetry.js";
+export * from "./workspace.js";
