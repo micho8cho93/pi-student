@@ -113,4 +113,32 @@ describe("plain terminal fallback", () => {
 		expect(output).toContain("The model provider could not complete that request.");
 		expect(output).toContain("Account has no credits remaining.");
 	});
+
+	it("announces controller stage changes so the terminal indicator never goes stale", async () => {
+		let output = "";
+		const outputStream = new Writable({ write(chunk, _encoding, callback) { output += chunk.toString(); callback(); } });
+		const inputStream = Readable.from(["what next\n", "/quit\n"]);
+		const readline = createInterface({ input: inputStream, output: outputStream });
+		const workflow = new WorkflowController(createLearningSession("/tmp/project"));
+		const agent = {
+			session: {
+				model: { provider: "openai", id: "gpt-test" },
+				modelRuntime: {} as ModelRuntime,
+				subscribe() { return () => {}; },
+				async prompt() {
+					workflow.updateLearningState({ currentStage: "understand", readyForNextStage: true, goalSummary: "Add a counter", understandingReady: true, reason: "clear" });
+				},
+			},
+			dispose() {},
+			setActiveTools() {},
+		} as unknown as LearningAgentSession;
+
+		await runRepl({ workflow, agent, modelRuntime: {} as ModelRuntime, inputReader: readline, input: inputStream, output: outputStream });
+		readline.close();
+
+		expect(workflow.getStage()).toBe("plan");
+		expect(output).toContain("ROUTING · UNDERSTAND");
+		expect(output).toContain("learning · PLAN");
+		expect(output.indexOf("ROUTING · UNDERSTAND")).toBeLessThan(output.indexOf("learning · PLAN"));
+	});
 });

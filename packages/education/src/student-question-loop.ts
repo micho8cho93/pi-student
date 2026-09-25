@@ -1,5 +1,6 @@
 import type { EngineeringConcern } from "./engineering-concern.js";
 import {
+	isQuestionRequired,
 	type QuestionContext,
 	type QuestionDecision,
 	type StudentAnswer,
@@ -107,7 +108,7 @@ export class StudentQuestionLoop implements StudentQuestionLoopContract {
 		const discoveredDecisions: string[] = [];
 		for (const question of questions) {
 			const answer = answerById.get(question.id) ?? "";
-			if (question.required === true && !answer) unresolvedIssues.push(question.prompt);
+			if (isQuestionRequired(question) && !answer) unresolvedIssues.push(question.prompt);
 			if (answer) discoveredDecisions.push(`${question.prompt} — ${answer}`);
 		}
 

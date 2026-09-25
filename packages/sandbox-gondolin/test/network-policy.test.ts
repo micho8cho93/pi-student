@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createGondolinHttpHooks } from "../src/gondolin-runtime.js";
+import { isBlockedHostname, isBlockedRequest, isUnsafeIpAddress, normalizeBlockedHosts } from "../src/network-policy.js";
 
 describe("Gondolin outbound network policy", () => {
 	it("blocks denied hostnames and their subdomains for HTTP and HTTPS", async () => {
@@ -47,5 +48,29 @@ describe("Gondolin outbound network policy", () => {
 		for (const protocol of ["http", "https"]) {
 			expect(await httpHooks.isRequestAllowed!(new Request(`${protocol}://school.example/path`))).toBe(false);
 		}
+	});
+
+	it("normalizes blocked hosts before authorization and blocks nested subdomains, ports, redirects, and lookalikes", async () => {
+		const blocked = normalizeBlockedHosts([" Example.ORG. ", "sub.example.org"]);
+		expect(blocked).toEqual(["example.org", "sub.example.org"]);
+		for (const host of ["example.org", "EXAMPLE.ORG.", "a.b.example.org"]) expect(isBlockedHostname(host, blocked)).toBe(true);
+		for (const host of ["notexample.org", "example.org.evil.test", "school.example"]) expect(isBlockedHostname(host, blocked)).toBe(false);
+		expect(isBlockedRequest(new Request("https://example.org:8443/redirect"), blocked)).toBe(true);
+		expect(isBlockedRequest(new Request("http://sub.example.org:80/"), blocked)).toBe(true);
+		expect(isBlockedRequest(new Request("https://example.org.evil.test/"), blocked)).toBe(false);
+	});
+
+	it("fails closed for malformed hosts and unsafe IP destinations", () => {
+		for (const address of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "192.0.2.1", "169.254.1.1", "0.0.0.0", "::", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"]) {
+			expect(isUnsafeIpAddress(address), address).toBe(true);
+			expect(isBlockedHostname(address, [])).toBe(true);
+		}
+		expect(isBlockedHostname("localhost", [])).toBe(true);
+		expect(isBlockedHostname("service.localhost", [])).toBe(true);
+		expect(isBlockedHostname("localhost.evil.test", [])).toBe(false);
+		expect(isUnsafeIpAddress("93.184.216.34")).toBe(false);
+		expect(isBlockedRequest({ url: "https://[not-an-ip]/" } as Request, [])).toBe(true);
+		expect(() => normalizeBlockedHosts(["https://example.org/path"])).toThrow();
+		expect(() => normalizeBlockedHosts(["bad host"])).toThrow();
 	});
 });

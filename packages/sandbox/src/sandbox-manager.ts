@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { SandboxConfig } from "@pi-student/contracts";
+import type { SandboxCapability, SandboxConfig, SandboxEnvironmentState, SandboxProviderCapabilities } from "@pi-student/contracts";
 import { Type, type Static } from "typebox";
 import {
 	createBashTool,
@@ -10,7 +10,7 @@ import {
 	createWriteTool,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { SANDBOX_WORKSPACE, resolveSandboxPath, type SandboxMode, type SandboxRuntime } from "./types.js";
+import { SANDBOX_WORKSPACE, SandboxConfigurationError, resolveSandboxPath, type SandboxMode, type SandboxRuntime } from "./types.js";
 
 export interface SandboxManagerOptions {
 	mode?: SandboxMode;
@@ -21,6 +21,7 @@ export interface SandboxManagerOptions {
 /** Concrete providers live in adapter packages such as sandbox-gondolin. */
 export interface SandboxProvider {
 	create(mode: SandboxMode): SandboxRuntime;
+	capabilities?(mode: SandboxMode): SandboxProviderCapabilities;
 }
 
 /** Owns backend selection and the lifecycle of one student's project sandbox. */
@@ -28,35 +29,115 @@ export class SandboxManager {
 	readonly runtime: SandboxRuntime;
 	private projectPath?: string;
 	private configuration?: SandboxConfig;
+	private state: SandboxEnvironmentState;
 
 	constructor(private readonly initialProjectPath?: string, options: SandboxManagerOptions = {}) {
 		this.runtime = options.runtime ?? options.provider?.create(options.mode ?? readSandboxMode()) ?? missingSandboxProvider();
+		const capabilities = this.capabilities();
+		this.state = {
+			status: "configured",
+			provider: capabilities.provider,
+			capabilities,
+			requiredCapabilities: [],
+		};
 	}
 
 	async configure(configuration: SandboxConfig): Promise<void> {
-		if (configuration.profile && configuration.mode === "host") throw new Error("Managed environments cannot run on the host.");
-		if (this.runtime.mode && this.runtime.mode !== configuration.mode) throw new Error("Sandbox provider mode does not match the resolved environment.");
+		const nextState = this.inspect(configuration);
+		if (nextState.status !== "configured" && nextState.status !== "ready") {
+			this.state = nextState;
+			throw new SandboxConfigurationError(nextState.message ?? "The selected coding environment is not usable.", configuration.mode, nextState.status, nextState.requiredCapabilities);
+		}
 		if (this.runtime.isRunning() && JSON.stringify(this.configuration) === JSON.stringify(configuration)) return;
 		const wasRunning = this.runtime.isRunning();
+		// The runtime validates and stages its own policy before stopping a VM. The
+		// manager performs the capability handshake first, so unsupported profiles
+		// cannot cause any lifecycle mutation here.
 		if (this.runtime.configure) await this.runtime.configure(configuration);
 		else if (configuration.profile) throw new Error("Sandbox provider cannot enforce this profile.");
 		else if (wasRunning) await this.runtime.stop();
 		this.configuration = configuration;
-		if (wasRunning && this.projectPath) await this.runtime.start(this.projectPath);
+		this.state = { ...nextState, status: "ready" };
+		if (wasRunning && this.projectPath) {
+			try {
+				await this.runtime.start(this.projectPath);
+				this.state = { ...this.state, status: "active" };
+			} catch (error) {
+				this.state = { ...this.state, status: "failed", message: "The coding environment could not be restarted." };
+				throw error;
+			}
+		}
 	}
 
 	async start(projectPath = this.initialProjectPath ?? process.cwd()): Promise<void> {
 		this.projectPath = path.resolve(projectPath);
-		await this.runtime.start(this.projectPath);
+		try {
+			await this.runtime.start(this.projectPath);
+			this.state = { ...this.state, status: "active", message: undefined };
+		} catch (error) {
+			this.state = { ...this.state, status: "failed", message: "The coding environment could not be started." };
+			throw error;
+		}
 	}
 
 	async stop(): Promise<void> {
 		await this.runtime.stop();
+		if (this.state.status === "active") this.state = { ...this.state, status: this.configuration ? "ready" : "configured" };
 	}
 
 	isRunning(): boolean {
 		return this.runtime.isRunning();
 	}
+
+	getEnvironmentState(): SandboxEnvironmentState {
+		return this.state;
+	}
+
+	setEnvironmentState(state: SandboxEnvironmentState): void {
+		this.state = state;
+	}
+
+	getCapabilities(): SandboxProviderCapabilities {
+		return this.capabilities();
+	}
+
+	inspect(configuration: SandboxConfig): SandboxEnvironmentState {
+		const capabilities = this.capabilities();
+		const requiredCapabilities = requiredCapabilitiesFor(configuration);
+		if (this.runtime.mode && this.runtime.mode !== configuration.mode) {
+			return { status: "unsupported", provider: capabilities.provider, capabilities, requiredCapabilities,
+				message: "The selected coding environment is not supported by the active sandbox provider." };
+		}
+		if (requiredCapabilities.length > 1 && !this.runtime.configure) {
+			return { status: "unsupported", provider: capabilities.provider, capabilities, requiredCapabilities,
+				message: "The active sandbox provider cannot apply the selected environment policy." };
+		}
+		const missing = requiredCapabilities.filter(capability => !capabilities.capabilities.includes(capability));
+		if (missing.length) {
+			return { status: "unsupported", provider: capabilities.provider, capabilities, requiredCapabilities,
+				message: "This managed environment requires sandbox capabilities that are unavailable on this device." };
+		}
+		return { status: "ready", provider: capabilities.provider, capabilities, requiredCapabilities };
+	}
+
+	private capabilities(): SandboxProviderCapabilities {
+		return this.runtime.getCapabilities?.() ?? {
+			provider: "unknown",
+			mode: this.runtime.mode ?? readSandboxMode(),
+			capabilities: ["workspace"],
+		};
+	}
+}
+
+export function requiredCapabilitiesFor(configuration: SandboxConfig): SandboxCapability[] {
+	const required: SandboxCapability[] = ["workspace"];
+	if (configuration.internetAllowed !== undefined) required.push("internet-policy");
+	if (configuration.blockedHosts?.length) required.push("blocked-hosts");
+	if (configuration.profile) {
+		required.push("managed-profile", "profile-image", "resource-limits");
+		if (configuration.profile.datasets.length) required.push("datasets");
+	}
+	return [...new Set(required)];
 }
 
 export function readSandboxMode(env: NodeJS.ProcessEnv = process.env): SandboxMode {

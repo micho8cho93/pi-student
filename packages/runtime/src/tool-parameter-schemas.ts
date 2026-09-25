@@ -15,7 +15,7 @@ export const QuestionSchema = Type.Object({
 	note: Type.Optional(Type.String({ description: "Optional short explanation shown with the question" })),
 	options: Type.Optional(Type.Array(Type.String(), { minItems: 2, maxItems: 6 })),
 	allowCustom: Type.Optional(Type.Boolean({ description: "Allow a custom response in addition to the options" })),
-	required: Type.Optional(Type.Boolean({ description: "Whether an answer is needed to continue" })),
+	required: Type.Optional(Type.Boolean({ description: "true = a non-blank answer is required to continue; false or omitted = optional" })),
 });
 
 export const StudentAskParams = Type.Object({

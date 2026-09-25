@@ -16,7 +16,8 @@
     "./governance-policy": "./dist/governance-policy.js",
     "./model-admission": "./dist/model-admission.js",
     "./institutional-environment": "./dist/institutional-environment.js",
-    "./provider-approvals": "./dist/provider-approvals.js"
+    "./provider-approvals": "./dist/provider-approvals.js",
+    "./execution-scope": "./dist/execution-scope.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -31,5 +32,10 @@
     "@pi-student/shared": "*",
     "@pi-student/telemetry": "*",
     "@supabase/supabase-js": "2.116.0"
+  },
+  "devDependencies": {
+    "@pi-student/runtime": "*",
+    "@pi-student/sandbox": "*",
+    "@pi-student/sandbox-gondolin": "*"
   }
 }

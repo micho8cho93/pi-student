@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { membershipCan, type OrganizationAccess, type OrganizationAdministration, type OrganizationAuthorization, type OrganizationCapability, type OrganizationMembership, type OrganizationMembershipStatus, type OrganizationRole } from "@pi-student/organization";
+import { membershipCan, type OrganizationAccess, type OrganizationAdministration, type OrganizationAuthorization, type OrganizationCapability, type OrganizationMembership, type OrganizationMembershipStatus, type OrganizationNonOwnerRole, type OrganizationRole } from "@pi-student/organization";
 
 /** Postgres RLS is authoritative; this adapter never supplies a trusted user ID. */
 export class SupabaseOrganizationAuthorization implements OrganizationAuthorization, OrganizationAdministration {
@@ -37,9 +37,16 @@ export class SupabaseOrganizationAuthorization implements OrganizationAuthorizat
 		return String(data);
 	}
 
-	async setMembership(organizationId: string, userId: string, role: OrganizationRole, status: OrganizationMembershipStatus): Promise<void> {
+	async setMembership(organizationId: string, userId: string, role: OrganizationNonOwnerRole, status: OrganizationMembershipStatus): Promise<void> {
 		const { error } = await this.client.rpc("set_organization_membership", {
 			organization_id_input: organizationId, user_id_input: userId, role_input: role, status_input: status,
+		});
+		if (error) throw error;
+	}
+
+	async transferOwnership(organizationId: string, targetUserId: string): Promise<void> {
+		const { error } = await this.client.rpc("transfer_organization_ownership", {
+			organization_id_input: organizationId, target_user_id_input: targetUserId,
 		});
 		if (error) throw error;
 	}
@@ -47,6 +54,13 @@ export class SupabaseOrganizationAuthorization implements OrganizationAuthorizat
 	async removeMembership(organizationId: string, userId: string): Promise<void> {
 		const { error } = await this.client.rpc("remove_organization_membership", {
 			organization_id_input: organizationId, user_id_input: userId,
+		});
+		if (error) throw error;
+	}
+
+	async setClassTeacherAssignments(classId: string, teacherIds: string[]): Promise<void> {
+		const { error } = await this.client.rpc("set_class_teacher_assignments", {
+			class_id_input: classId, teacher_ids_input: teacherIds,
 		});
 		if (error) throw error;
 	}

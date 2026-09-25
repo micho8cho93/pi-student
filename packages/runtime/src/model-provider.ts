@@ -5,12 +5,18 @@ import { createModelRuntime } from "./model-runtime.js";
 /** Model provider shape needed by the Pi-backed runtime composition layer. */
 export interface StudentModelProvider extends ModelProvider {
 	readonly runtime: ModelRuntime;
+	fallbackFor?(provider: string, modelId: string): string | undefined;
 }
 
 /** Wraps Pi's current direct-provider model catalog behind the stable provider contract. */
 export class DirectModelProvider implements StudentModelProvider {
 	private constructor(readonly runtime: ModelRuntime) {}
 	private hosted?: { projectId: string; url: string; profiles: ModelProfile[] };
+	fallbackFor(provider: string, modelId: string): string | undefined {
+		if (provider !== "institution") return undefined;
+		const fallbackId = this.hosted?.profiles.find(profile => profile.id === modelId)?.fallbackProfileId;
+		return fallbackId ? `institution/${fallbackId}` : undefined;
+	}
 	static async create(runtime?: ModelRuntime): Promise<DirectModelProvider> { return new DirectModelProvider(runtime ?? await createModelRuntime()); }
 	configureHostedProfiles(projectId: string, url: string, profiles: ModelProfile[], studentToken: string): void {
 		const endpoint = new URL(url);

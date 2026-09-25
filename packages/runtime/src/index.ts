@@ -4,4 +4,7 @@ export * from "./model-runtime.js";
 export * from "./runtime-args.js";
 export * from "./student-classroom.js";
 export * from "./student-runtime.js";
+export * from "./execution-context.js";
+export * from "./model-selection.js";
+export * from "./extension-authorization.js";
 export * from "./telemetry-integration.js";

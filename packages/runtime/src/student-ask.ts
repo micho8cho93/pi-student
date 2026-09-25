@@ -2,6 +2,8 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import { StudentQuestionLoop } from "@pi-student/education/student-question-loop";
 import {
 	isQuestionCategory,
+	isQuestionRequired,
+	parseQuestionRequired,
 	QUESTION_CATEGORIES,
 	type QuestionCategory,
 	type QuestionContext,
@@ -127,9 +129,18 @@ export function normalizeQuestions(value: unknown): StudentQuestion[] {
 			...(typeof candidate.note === "string" ? { note: candidate.note } : {}),
 			...(Array.isArray(candidate.options) ? { options: candidate.options as string[] } : {}),
 			...(typeof candidate.allowCustom === "boolean" ? { allowCustom: candidate.allowCustom } : {}),
-			...(typeof candidate.required === "boolean" ? { required: candidate.required } : {}),
+			...requiredField(candidate.required, index),
 		};
 	});
+}
+
+function requiredField(value: unknown, index: number): { required?: boolean } {
+	try {
+		const parsed = parseQuestionRequired(value);
+		return parsed === undefined ? {} : { required: parsed };
+	} catch (error) {
+		throw new Error(`Question ${index + 1}: ${(error as Error).message}`);
+	}
 }
 
 async function askQuestion(
@@ -146,7 +157,7 @@ async function askQuestion(
 		if (question.allowCustom && selected === customLabel) {
 			while (true) {
 				const answer = await ctx.ui.input(`${title}\n${prompt}`, "Type your own response");
-				if (answer === undefined || !question.required || answer.trim()) return answer;
+				if (answer === undefined || !isQuestionRequired(question) || answer.trim()) return answer;
 				prompt = `${question.prompt}\n\nA response is required to continue. Please enter a concrete answer.`;
 			}
 		}
@@ -154,7 +165,7 @@ async function askQuestion(
 	}
 	while (true) {
 		const answer = await ctx.ui.input(`${title}\n${prompt}`, "Type your answer");
-		if (answer === undefined || !question.required || answer.trim()) return answer;
+		if (answer === undefined || !isQuestionRequired(question) || answer.trim()) return answer;
 		prompt = `${question.prompt}\n\nA response is required to continue. Please enter a concrete answer.`;
 	}
 }

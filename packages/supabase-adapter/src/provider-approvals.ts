@@ -27,12 +27,3 @@ export async function currentPiUserId(): Promise<string> {
 	if (error || !data.user) throw new Error("Sign in to Pi Student before connecting Supabase MCP.");
 	return data.user.id;
 }
-
-export async function supabaseMcpAvailableForCurrentProject(): Promise<boolean> {
-	const config = readSupabaseConfig();
-	const projectId = (await new FileTeacherContextStore().read()).projectId;
-	if (!config || !projectId) return false;
-	const { data, error } = await createPiSupabaseClient(config).rpc("resolve_institutional_environment", { project_id_input: projectId });
-	if (error) throw error;
-	return Array.isArray(data?.mcps) && data.mcps.some((item: { endpoint?: string }) => item.endpoint === "https://mcp.supabase.com/mcp");
-}

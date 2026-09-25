@@ -7,7 +7,7 @@
     "pi-student-platform-admin": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/build-supabase-browser.mjs dist/supabase-browser.js",
     "start": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --root ../.. apps/platform-admin/test"

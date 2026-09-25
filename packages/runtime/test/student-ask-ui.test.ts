@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { createStudentAskExtension } from "@pi-student/runtime/student-ask";
+import { createStudentAskExtension, normalizeQuestions } from "@pi-student/runtime/student-ask";
 
 type RegisteredTool = Parameters<ExtensionAPI["registerTool"]>[0];
 
@@ -68,4 +68,44 @@ describe("student question interface boundary", () => {
 		expect(response.details).toMatchObject({ cancelled: true, recoverable: true, stopped: true });
 	});
 
+
+	describe("required contract", () => {
+		const setup = () => {
+			let tool: RegisteredTool | undefined;
+			const pi = { on: vi.fn(), registerTool(value: RegisteredTool) { tool = value; } } as unknown as ExtensionAPI;
+			createStudentAskExtension()(pi);
+			return tool!;
+		};
+		const ask = (required: unknown, answers: string[]) => {
+			const input = vi.fn();
+			for (const answer of answers) input.mockResolvedValueOnce(answer);
+			const question = { id: "q", prompt: "Anything to preserve?", category: "requirements", ...(required === undefined ? {} : { required }) };
+			return { input, run: () => setup().execute("call", { questions: [question] } as never, undefined, undefined, { ui: { input } } as never) };
+		};
+
+		it("re-prompts a blank answer only when required is true", async () => {
+			const { input, run } = ask(true, ["  ", "Keep the API"]);
+			await run();
+			expect(input).toHaveBeenCalledTimes(2);
+		});
+
+		it.each([["omitted", undefined], ["false", false]])("accepts a blank answer when required is %s", async (_label, required) => {
+			const { input, run } = ask(required, ["   "]);
+			const response = await run();
+			expect(input).toHaveBeenCalledTimes(1);
+			expect(response.details).toMatchObject({ answers: [{ questionId: "q", answer: "   " }] });
+		});
+
+		it("rejects a non-boolean required value instead of coercing it", async () => {
+			const { input, run } = ask("yes", []);
+			await expect(run()).rejects.toThrow(/Question 1: required must be a boolean/);
+			expect(input).not.toHaveBeenCalled();
+		});
+
+		it("keeps the flag only when it was supplied", () => {
+			expect(normalizeQuestions([{ id: "a", prompt: "p", category: "review" }])[0]).not.toHaveProperty("required");
+			expect(normalizeQuestions([{ id: "a", prompt: "p", category: "review", required: false }])[0]).toHaveProperty("required", false);
+			expect(normalizeQuestions([{ id: "a", prompt: "p", category: "review", required: "true" }])[0]).toHaveProperty("required", true);
+		});
+	});
 });

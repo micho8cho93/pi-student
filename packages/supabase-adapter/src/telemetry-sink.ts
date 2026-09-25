@@ -5,6 +5,17 @@ export class SupabaseTelemetrySink implements TelemetrySink {
 	constructor(private readonly client: SupabaseClient) {}
 	async record(event: TelemetryEvent): Promise<void> {
 		if(event.type === "safety-signal"){const {error}=await this.client.rpc("record_chat_safety_signal",{class_id_input:event.classId,categories_input:event.categories});if(error)throw error;return;}
+		if (event.type === "execution-decision") {
+			const { error } = await this.client.rpc("record_execution_audit_event", {
+				event_id_input: event.eventId, organization_id_input: event.organizationId, class_id_input: event.classId,
+				project_id_input: event.projectId, session_id_input: event.sessionId ?? null, action_input: event.action,
+				decision_input: event.decision, extension_id_input: event.extensionId ?? null, capability_input: event.capability ?? null,
+				stage_input: event.stage ?? null, reason_code_input: event.reasonCode, environment_provider_input: event.environmentProvider ?? null,
+				environment_status_input: event.environmentStatus ?? null,
+			});
+			if (error) throw error;
+			return;
+		}
 		if (event.type === "learning-record") return uploadLearningRecord(this.client, event.record);
 	}
 }

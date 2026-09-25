@@ -11,10 +11,14 @@ import {
 	type SandboxFileStat,
 	type SandboxRuntime,
 } from "@pi-student/sandbox/types";
+import type { SandboxProviderCapabilities } from "@pi-student/contracts";
 
 /** Development/test backend. Unsafe for student use: processes run on the host. */
 export class HostRuntime implements SandboxRuntime {
 	readonly mode = "host" as const;
+	getCapabilities(): SandboxProviderCapabilities {
+		return { provider: "host-development", mode: "host", capabilities: ["workspace"] };
+	}
 	private projectPath?: string;
 	private running = false;
 

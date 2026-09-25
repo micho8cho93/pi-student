@@ -10,3 +10,4 @@ export * from "./governance-policy.js";
 export * from "./model-admission.js";
 export * from "./institutional-environment.js";
 export * from "./provider-approvals.js";
+export * from "./execution-scope.js";

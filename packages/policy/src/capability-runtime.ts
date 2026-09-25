@@ -32,7 +32,8 @@ export function capabilityState(workflow: object): CapabilityState {
 }
 
 /** Enforce at the shared session boundary, including SDK pickers and RPC setters. */
-export function guardCapabilitySession(session: AgentSession, state: CapabilityState): void {
+export function guardCapabilitySession(session: AgentSession, state: CapabilityState,
+	validateModel?: (model: { provider: string; id: string } | undefined) => Promise<void>): void {
 	const setModel = session.setModel.bind(session);
 	const setThinking = session.setThinkingLevel.bind(session);
 	const available = session.getAvailableThinkingLevels.bind(session);
@@ -45,14 +46,18 @@ export function guardCapabilitySession(session: AgentSession, state: CapabilityS
 		setThinking(level, options);
 	};
 	session.setModel = async (model, options) => {
+		await validateModel?.(model);
+		if (state.effective?.sourceVersions?.organization && !state.settings.models.length) { state.block("models"); throw new Error("No model is approved for this project."); }
 		if (!modelAllowed(state.settings, model)) { state.block("models"); throw new Error("That model is not enabled for this project, or supports none of its reasoning levels."); }
 		await setModel(model, options);
 		const permitted = allowedReasoningLevels(state.settings, model);
 		if (!permitted.includes(session.thinkingLevel)) setThinking(permitted[0]!);
 	};
 	session.prompt = async (text, options) => {
+		await validateModel?.(session.model);
 		const reason = state.limitReached();
 		if (reason) { state.block("sessionLimits"); throw new Error(reason); }
+		if (state.effective?.sourceVersions?.organization && !state.settings.models.length) { state.block("models"); throw new Error("No model is approved for this project."); }
 		if (session.model && !modelAllowed(state.settings, session.model)) { state.block("models"); throw new Error("Select an approved model with an enabled reasoning level before continuing."); }
 		if (session.model) {
 			const permitted = allowedReasoningLevels(state.settings, session.model);

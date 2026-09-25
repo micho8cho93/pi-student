@@ -4,6 +4,7 @@ export * from "./usage.js";
 
 /** These are tenant roles, independent of classroom teacher/student roles. */
 export type OrganizationRole = "owner" | "admin" | "teacher" | "member";
+export type OrganizationNonOwnerRole = Exclude<OrganizationRole, "owner">;
 export type OrganizationMembershipStatus = "active" | "suspended";
 /** Assigned only by a trusted platform service, never by classroom membership. */
 export type PlatformRole = "platform_admin";
@@ -37,8 +38,10 @@ export interface OrganizationAuthorization {
 /** Commands are separate from the student runtime's read-only authorization seam. */
 export interface OrganizationAdministration {
 	createOrganization(slug: string, name: string): Promise<OrganizationId>;
-	setMembership(organizationId: OrganizationId, userId: UserId, role: OrganizationRole, status: OrganizationMembershipStatus): Promise<void>;
+	setMembership(organizationId: OrganizationId, userId: UserId, role: OrganizationNonOwnerRole, status: OrganizationMembershipStatus): Promise<void>;
+	transferOwnership(organizationId: OrganizationId, targetUserId: UserId): Promise<void>;
 	removeMembership(organizationId: OrganizationId, userId: UserId): Promise<void>;
+	setClassTeacherAssignments(classId: string, teacherIds: UserId[]): Promise<void>;
 }
 
 /** A product grant is independent of a user's authorization within a tenant. */

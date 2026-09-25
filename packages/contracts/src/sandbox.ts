@@ -7,6 +7,32 @@ export interface SandboxConfig {
 	profile?: SandboxProfile;
 }
 
+export type SandboxCapability =
+	| "workspace"
+	| "internet-policy"
+	| "blocked-hosts"
+	| "managed-profile"
+	| "profile-image"
+	| "datasets"
+	| "resource-limits";
+
+export type SandboxEnvironmentStatus = "configured" | "unsupported" | "pending" | "building" | "ready" | "active" | "failed";
+
+export interface SandboxProviderCapabilities {
+	provider: string;
+	mode: SandboxConfig["mode"];
+	capabilities: readonly SandboxCapability[];
+}
+
+/** Safe, user-facing state shared by the terminal, Paseo, and the runtime. */
+export interface SandboxEnvironmentState {
+	status: SandboxEnvironmentStatus;
+	provider: string;
+	capabilities: SandboxProviderCapabilities;
+	requiredCapabilities: readonly SandboxCapability[];
+	message?: string;
+}
+
 export interface ManagedDataset {
 	id: string;
 	organizationId: string;
@@ -36,7 +62,7 @@ export interface SandboxProfile {
 	/** Pinned package versions and integrity hashes only; no install scripts on the host. */
 	packages: ReadonlyArray<{ name: string; version: string; integrity: string }>;
 	imageDigest: string;
-	buildStatus: "ready";
+	buildStatus: "pending" | "building" | "ready" | "failed";
 	datasets: readonly ManagedDataset[];
 	network: { allowed: boolean; allowedHosts: readonly string[] };
 	limits: { cpuMillis: number; memoryMiB: number; storageMiB: number; timeoutSeconds: number };

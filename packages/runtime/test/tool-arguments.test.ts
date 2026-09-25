@@ -48,6 +48,7 @@ describe("model tool argument preparation", () => {
 			explanation: "The goal and constraints are clear",
 		}, "understand")).toEqual({
 			readyForNextStage: true,
+			currentStage: "understand",
 			goalSummary: "Build a landing page",
 			understandingReady: true,
 			reason: "The goal and constraints are clear",
@@ -58,5 +59,27 @@ describe("model tool argument preparation", () => {
 		expect(prepareSaveToDesktopArguments({ path: "/workspace/index.html" })).toEqual({
 			source: "/workspace/index.html",
 		});
+	});
+
+	it("canonicalizes the required flag at the model boundary", () => {
+		const ask = (required?: unknown) => prepareStudentAskArguments({ questions: [{ prompt: "Goal?", ...(required === undefined ? {} : { required }) }] }) as { questions: Array<Record<string, unknown>> };
+		expect("required" in ask().questions[0]!).toBe(false);
+		expect(ask(true).questions[0]!.required).toBe(true);
+		expect(ask(false).questions[0]!.required).toBe(false);
+		expect(ask("TRUE").questions[0]!.required).toBe(true);
+		expect(ask("false").questions[0]!.required).toBe(false);
+		// Unusable values are passed through so validation rejects them, never silently made optional.
+		expect(ask("yes").questions[0]!.required).toBe("yes");
+		expect(ask(1).questions[0]!.required).toBe(1);
+	});
+
+	it("normalizes stage names in learning_state arguments", () => {
+		const prepared = (input: Record<string, unknown>) => prepareLearningStateArguments({ readyForNextStage: false, reason: "r", ...input }, "understand");
+		expect(prepared({ currentStage: "PLAN", requestedNextStage: "Implementing" })).toMatchObject({ currentStage: "plan", requestedNextStage: "implement" });
+		expect(prepared({ stage: "UNDERSTANDING" })).toMatchObject({ currentStage: "understand" });
+		expect(prepared({})).not.toHaveProperty("currentStage");
+		expect(prepared({ currentStage: "" })).not.toHaveProperty("currentStage");
+		// Invalid values survive as text so learning_state can reject them with the allowed list.
+		expect(prepared({ currentStage: "deploy" })).toMatchObject({ currentStage: "deploy" });
 	});
 });

@@ -62,7 +62,7 @@ export const editorCompletionUiScript = (port: number) => `
     const limit = node("select");
     for (const value of [2, 5, 10]) { const option = node("option", String(value)); option.value = String(value); limit.append(option); }
     limit.value = String(settings.perMinute); limitLabel.append(limit);
-    const note = node("div", "AI suggestions send excerpts of the open file and up to two nearby source files to the selected model. Local word completion stays on this device.");
+    const note = node("div", "AI suggestions send excerpts of the open file to the selected model. No nearby files are included. Local word completion stays on this device.");
     const status = node("div", "");
     toggle.type = "button";
     toggle.title = "Code completion settings";
@@ -79,7 +79,8 @@ export const editorCompletionUiScript = (port: number) => `
     const oldPosition = host.style.position;
     host.style.position = "relative";
     host.append(toolbar);
-    const label = () => { toggle.textContent = settings.enabled ? "AI: " + (settings.model === "auto" ? "Auto" : (models.find(item => item.id === settings.model)?.label || settings.model).slice(0, 24)) : "Complete · AI off"; };
+    let executedModel = null;
+    const label = () => { toggle.textContent = settings.enabled ? "AI: " + (settings.model === "auto" ? (executedModel || "Auto") : (models.find(item => item.id === settings.model)?.label || settings.model).slice(0, 24)) : "Complete · AI off"; };
     label();
     const loadModels = async () => {
       try {
@@ -87,15 +88,15 @@ export const editorCompletionUiScript = (port: number) => `
         select.replaceChildren();
         const auto = node("option", "Auto (lowest cost approved)"); auto.value = "auto"; select.append(auto);
         for (const model of models) { const option = node("option", model.label + " (" + model.id + ")"); option.value = model.id; select.append(option); }
-        if (!models.some(item => item.id === settings.model)) settings.model = "auto";
+        if (settings.model !== "auto" && !models.some(item => item.id === settings.model)) { const unavailable = node("option", "Unavailable: " + settings.model); unavailable.value = settings.model; unavailable.disabled = true; select.append(unavailable); status.textContent = "The selected model is unavailable. Choose another model."; }
         select.value = settings.model;
-        status.textContent = models.length ? "" : "Connect an approved model to use AI suggestions.";
+        if (!models.length) status.textContent = "Connect an approved model to use AI suggestions.";
         save(settings); label();
       } catch (error) { status.textContent = error.message; }
     };
     toggle.onclick = () => { panel.hidden = !panel.hidden; panel.style.display = panel.hidden ? "none" : "grid"; if (!panel.hidden) void loadModels(); };
     enabled.onchange = () => { settings.enabled = enabled.checked; save(settings); label(); if (!settings.enabled) clear(); else schedule(); };
-    select.onchange = () => { settings.model = select.value; save(settings); label(); clear(); };
+    select.onchange = () => { settings.model = select.value; executedModel = null; status.textContent = ""; save(settings); label(); clear(); };
     limit.onchange = () => { settings.perMinute = Number(limit.value); save(settings); };
     const hidePopup = () => { popup?.remove(); popup = null; options = []; ai = null; };
     const clear = () => { revision++; if (timer) clearTimeout(timer); timer = null; controller?.abort(); controller = null; hidePopup(); };
@@ -156,7 +157,8 @@ export const editorCompletionUiScript = (port: number) => `
         const body = await request("/editor-completion", { method: "POST", signal: controller.signal, body: JSON.stringify({ filename, content, cursor: pos, model: settings.model }) });
         if (current !== revision || workspace() !== initialWorkspace || view.state.doc.toString() !== content || view.state.selection.main.head !== pos || !settings.enabled) return;
         if (body.suggestion && !content.slice(pos).startsWith(body.suggestion)) show([], body.suggestion);
-        status.textContent = "Server budget: " + body.remainingMinute + " this minute, " + body.remainingDay + " today.";
+        executedModel = body.model; label();
+        status.textContent = "Using " + body.model + ". Server budget: " + body.remainingMinute + " this minute, " + body.remainingDay + " today.";
       } catch (error) { if (error.name !== "AbortError" && current === revision) status.textContent = error.message; }
     };
     const schedule = () => {

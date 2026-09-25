@@ -11,6 +11,7 @@ export interface ClassroomAuthenticator {
 }
 
 export interface ClassroomRuntimeServices {
+	workspacePath?: string;
 	repository: ClassroomRepository;
 	identityProvider: IdentityProvider;
 	authenticator: ClassroomAuthenticator;
@@ -36,7 +37,7 @@ export function createStudentClassroomExtension(services: ClassroomRuntimeServic
 			const choice = await ctx.ui.select(`Projects · ${className} · newest first`, labels);
 			const project = items[labels.indexOf(choice ?? "")];
 			if (!project) return;
-			const context: TeacherContext = { policy: project.policy, classId, organizationId: project.organizationId, projectId: project.id, requirementIds: project.requirements.map(item => item.id), standardIds: project.standards.map(item => item.id) };
+			const context: TeacherContext = { policy: project.policy, workspacePath: services.workspacePath, classId, organizationId: project.organizationId, projectId: project.id, requirementIds: project.requirements.map(item => item.id), standardIds: project.standards.map(item => item.id) };
 			await onSelect(context, ctx);
 			await services.contextStore.write(context);
 			assignment = project; selectedContext = context;

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { SandboxConfig } from "@pi-student/contracts";
+import type { SandboxConfig, SandboxEnvironmentState, SandboxProviderCapabilities } from "@pi-student/contracts";
 
 export const SANDBOX_WORKSPACE = "/workspace";
 
@@ -25,6 +25,8 @@ export interface SandboxFileStat {
 
 export interface SandboxRuntime {
 	readonly mode?: SandboxMode;
+	/** The provider's enforceable capabilities, used before configuration mutates runtime state. */
+	getCapabilities?(): SandboxProviderCapabilities;
 	/** Providers must reject profiles they cannot faithfully enforce. */
 	configure?(configuration: SandboxConfig): Promise<void>;
 	setInternetAllowed?(allowed: boolean): void;
@@ -40,6 +42,7 @@ export interface SandboxRuntime {
 	listDirectory?(path: string): Promise<string[]>;
 	getWorkspacePath(): string;
 	isRunning(): boolean;
+	getEnvironmentState?(): SandboxEnvironmentState;
 	/** Optional because alternate backends may expose only listFiles/fileExists. */
 	stat?(path: string): Promise<SandboxFileStat>;
 }
@@ -50,6 +53,21 @@ export class SandboxRuntimeError extends Error {
 	constructor(message: string, readonly runtime: SandboxMode, options?: { cause?: unknown }) {
 		super(message, options);
 		this.name = "SandboxRuntimeError";
+	}
+}
+
+export class SandboxConfigurationError extends SandboxRuntimeError {
+	readonly code: string;
+
+	constructor(
+		message: string,
+		runtime: SandboxMode,
+		readonly status: SandboxEnvironmentState["status"],
+		readonly missingCapabilities: readonly string[] = [],
+	) {
+		super(message, runtime);
+		this.code = status === "unsupported" ? "SANDBOX_UNSUPPORTED" : "SANDBOX_CONFIGURATION_INVALID";
+		this.name = "SandboxConfigurationError";
 	}
 }
 

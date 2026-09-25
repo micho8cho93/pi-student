@@ -8,21 +8,22 @@ import { createInterface } from "node:readline/promises";
 import { runVozBridge } from "@pi-student/paseo-adapter/voz-bridge";
 import { initTheme, InteractiveMode, runRpcMode } from "@earendil-works/pi-coding-agent";
 import { createLearningAgentRuntime, createLearningAgentSession, createStudentRuntime, DirectModelProvider, FileTeacherContextStore, StoredPolicyProvider } from "@pi-student/sdk";
-import { createRuntimeSessionManager, parseStudentRuntimeArgs, splitModelId } from "@pi-student/runtime/runtime-args";
+import { createRuntimeSessionManager, parseStudentRuntimeArgs } from "@pi-student/runtime/runtime-args";
 import { runRepl } from "./terminal/repl.js";
-import { ensureProviderConfigured, findReadyProvider, runProviderSetup, SetupCancelledError } from "@pi-student/runtime/setup";
+import { ensureProviderConfigured, runProviderSetup, SetupCancelledError } from "@pi-student/runtime/setup";
 import { redactSecrets } from "@pi-student/runtime/ui";
 import { readSandboxMode } from "@pi-student/sdk/sandbox";
-import { SandboxRuntimeError } from "@pi-student/sandbox/types";
+import { SandboxConfigurationError, SandboxRuntimeError } from "@pi-student/sandbox/types";
 import { GondolinSandboxProvider } from "@pi-student/sandbox-gondolin/provider";
 import { runDoctor } from "./install/doctor.js";
 import { runRepair } from "./install/repair.js";
 import { appendDiagnosticLog } from "./install/logging.js";
 import { createLearningSession } from "@pi-student/education/types";
 import { WorkflowController } from "@pi-student/education/workflow-controller";
-import { authenticateInBrowser, createPiSupabaseClient, readSupabaseConfig, saveSupabaseConfig, SupabaseClassroomRepository, SupabaseGovernancePolicyProvider, SupabaseIdentityProvider, SupabaseInstitutionalEnvironmentProvider, SupabaseModelAdmissionProvider, SupabaseTelemetrySink } from "@pi-student/supabase-adapter";
+import { authenticateInBrowser, createPiSupabaseClient, readSupabaseConfig, saveSupabaseConfig, SupabaseClassroomRepository, SupabaseExecutionScopeProvider, SupabaseGovernancePolicyProvider, SupabaseIdentityProvider, SupabaseInstitutionalEnvironmentProvider, SupabaseModelAdmissionProvider, SupabaseTelemetrySink } from "@pi-student/supabase-adapter";
 import { launchPaseoGui } from "@pi-student/paseo-adapter/launcher";
 import { createStartupCueLoader } from "@pi-student/runtime/progress";
+import { availableExecutionModels, selectExecutionModel } from "@pi-student/runtime/model-selection";
 import { disablePiStudentSlashCommands, isDisabledStudentSlashCommand } from "./terminal/slash-commands.js";
 import { runPublishingCommand } from "./publishing-commands.js";
 import { runEcosystemBridge } from "@pi-student/paseo-adapter/ecosystem-bridge";
@@ -150,11 +151,15 @@ async function runTerminal(flags: string[]): Promise<void> {
 	try {
 	await studentRuntime.start();
 	const modelRuntime = studentRuntime.modelRuntime;
+	const executionContext = await studentRuntime.executionContext();
 	const allowedProviders = await managedProviderChoices(studentRuntime);
 	// Finish the async catalog/auth snapshot before attaching readline. This
 	// prevents piped first-run input from being consumed while the runtime loads.
 	await modelRuntime.refresh({ allowNetwork: false });
-	const ready = await findReadyProvider(modelRuntime, allowedProviders);
+	const first = (await availableExecutionModels(modelRuntime, executionContext))[0];
+	const ready = first ? { providerId: first.provider, modelId: first.id } : undefined;
+	if (!ready && executionContext.classId && !executionContext.projectId) throw new Error("Choose a class project before starting a coding session.");
+	if (!ready && executionContext.organizationId) throw new Error("No institution-approved model is available for this project.");
 	if (!ready) startupCues.stop("Provider setup needed");
 	const terminal = createInterface({ input: process.stdin, output: process.stdout });
 	let setup;
@@ -176,8 +181,7 @@ async function runTerminal(flags: string[]): Promise<void> {
 		terminal.close();
 		throw error;
 	}
-	const model = modelRuntime.getModel(setup.providerId, setup.modelId);
-	if (!model) throw new Error(`Configured model ${setup.providerId}/${setup.modelId} is unavailable.`);
+	const model = (await selectExecutionModel(modelRuntime, await studentRuntime.executionContext(), `${setup.providerId}/${setup.modelId}`)).model;
 	const workflow = new WorkflowController(createLearningSession(cwd));
 		if (interactive) {
 			terminal.close();
@@ -209,7 +213,7 @@ async function runTerminal(flags: string[]): Promise<void> {
 		const agent = await createLearningAgentSession(cwd, workflow, modelRuntime, model, studentRuntime.sandbox, { services: studentRuntime.services });
 		startupCues.stop("Pi Student is ready");
 		try {
-			await runRepl({ workflow, agent, modelRuntime, inputReader: terminal, allowedProviders });
+			await runRepl({ workflow, agent, modelRuntime, inputReader: terminal, allowedProviders, executionContext: () => studentRuntime.executionContext() });
 		} finally {
 			agent.dispose();
 		}
@@ -255,19 +259,15 @@ async function runSharedRuntime(flags: string[]): Promise<void> {
 	let handedToRpc = false;
 	try {
 		const modelRuntime = studentRuntime.modelRuntime;
-		const allowedProviders = await managedProviderChoices(studentRuntime);
 		await modelRuntime.refresh({ allowNetwork: false });
-		const requested = args.model ? splitModelId(args.model) : undefined;
-		const ready = requested ? undefined : await findReadyProvider(modelRuntime, allowedProviders);
-		if (requested && allowedProviders && !allowedProviders.includes(requested.provider)) throw new Error(`Provider ${requested.provider} is not approved for this organization.`);
-		const model = requested
-			? modelRuntime.getModel(requested.provider, requested.modelId)
-			: ready ? modelRuntime.getModel(ready.providerId, ready.modelId) : undefined;
-		if (requested && !model) throw new Error(`Configured model ${args.model} is unavailable.`);
+		const sessionManager = createRuntimeSessionManager(cwd, args);
+		await studentRuntime.bindSession(sessionManager);
+		const executionContext = await studentRuntime.executionContext();
+		const model = (await selectExecutionModel(modelRuntime, executionContext, args.model, sessionManager)).model;
 		const thinkingLevel = parseThinkingLevel(args.thinking);
 		const workflow = new WorkflowController(createLearningSession(cwd));
 		const agent = await createLearningAgentRuntime(cwd, workflow, modelRuntime, model, studentRuntime.sandbox, {
-			sessionManager: createRuntimeSessionManager(cwd, args),
+			sessionManager,
 			thinkingLevel,
 			services: studentRuntime.services,
 		});
@@ -292,6 +292,7 @@ async function createApplicationRuntime(projectPath: string) {
 	if (!config) {
 		return createStudentRuntime({
 			projectPath,
+			contextStore,
 			modelProvider,
 			sandboxProvider: new GondolinSandboxProvider(),
 			identityProvider: { getIdentity: async () => ({ kind: "personal" as const }) },
@@ -303,9 +304,11 @@ async function createApplicationRuntime(projectPath: string) {
 	const gatewayUrl = process.env.PI_STUDENT_MODEL_GATEWAY_URL?.trim();
 	return createStudentRuntime({
 		projectPath,
+		contextStore,
 		modelProvider,
 		sandboxProvider: new GondolinSandboxProvider(),
 		identityProvider,
+		scopeProvider: new SupabaseExecutionScopeProvider(client),
 		environmentProvider: new SupabaseInstitutionalEnvironmentProvider(client),
 		policyProvider: new SupabaseGovernancePolicyProvider(client, new StoredPolicyProvider(() => contextStore.read()), gatewayUrl ? {
 			url: gatewayUrl, configure: (projectId, url, profiles, token) => modelProvider.configureHostedProfiles(projectId, url, profiles, token),
@@ -366,12 +369,17 @@ try {
 	await main();
 } catch (error) {
 	const message = redactSecrets(error instanceof Error ? error.message : String(error));
-	const sandboxFailure = error instanceof SandboxRuntimeError || /secure coding|sandbox|gondolin|qemu|krun/i.test(message);
-	if (sandboxFailure) {
-		const logPath = await appendDiagnosticLog("runtime", message).catch(() => undefined);
-		process.stderr.write(`Pi Student could not start its secure coding environment.\n\nRun:\n  pi-student doctor\n\nfor more information.${logPath ? `\n\nDiagnostic log:\n  ${logPath}` : ""}\n`);
+	if (error instanceof SandboxConfigurationError) {
+		process.stderr.write(`Coding environment unavailable: ${message}\n`);
+		process.exitCode = 1;
 	} else {
-		process.stderr.write(`Pi Student could not start: ${message}\n`);
+		const sandboxFailure = error instanceof SandboxRuntimeError || /secure coding|sandbox|gondolin|qemu|krun/i.test(message);
+		if (sandboxFailure) {
+			const logPath = await appendDiagnosticLog("runtime", message).catch(() => undefined);
+			process.stderr.write(`Pi Student could not start its secure coding environment.\n\nRun:\n  pi-student doctor\n\nfor more information.${logPath ? `\n\nDiagnostic log:\n  ${logPath}` : ""}\n`);
+		} else {
+			process.stderr.write(`Pi Student could not start: ${message}\n`);
+		}
 	}
 	process.exitCode = 1;
 }

@@ -51,6 +51,7 @@
   "devDependencies": {
     "@getpaseo/cli": "^0.8.0",
     "@types/node": "^22.10.0",
+    "esbuild": "0.28.2",
     "supabase": "2.117.0",
     "tsx": "^4.19.2",
     "turbo": "^2.10.13",

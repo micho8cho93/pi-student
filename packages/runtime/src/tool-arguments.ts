@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
-import type { QuestionCategory } from "@pi-student/education/question-context";
+import { parseQuestionRequired, type QuestionCategory } from "@pi-student/education/question-context";
+import { parseLearningStage } from "@pi-student/education/stage";
 import type { LearningStage } from "@pi-student/education/types";
 import type { SaveToDesktopParams, StudentAskParams, StudentPlanParams } from "./tool-parameter-schemas.js";
 
@@ -134,13 +135,36 @@ export function prepareStudentAskArguments(args: unknown): Static<typeof Student
 				...(typeof question.note === "string" ? { note: question.note } : {}),
 				...(options && options.length >= 2 ? { options } : {}),
 				...(typeof question.allowCustom === "boolean" ? { allowCustom: question.allowCustom } : {}),
-				...(typeof question.required === "boolean" ? { required: question.required } : {}),
+				...requiredField(question.required),
 			};
 		})
 		.filter((question): question is NonNullable<typeof question> => question !== undefined)
 		.slice(0, 4);
 
 	return questions.length > 0 ? { questions } as Static<typeof StudentAskParams> : {} as Static<typeof StudentAskParams>;
+}
+
+/**
+ * Canonicalize `required` (omitted stays omitted). An unusable value is passed
+ * through unchanged so schema validation rejects it visibly instead of a
+ * required question silently becoming optional.
+ */
+function requiredField(value: unknown): { required?: unknown } {
+	try {
+		const parsed = parseQuestionRequired(value);
+		return parsed === undefined ? {} : { required: parsed };
+	} catch {
+		return { required: value };
+	}
+}
+
+/** Canonical lowercase stage, or the raw string when unknown so `learning_state` can reject it with the allowed values. */
+function stageField(value: unknown): string | undefined {
+	try {
+		return parseLearningStage(value);
+	} catch {
+		return typeof value === "string" ? value.trim() : undefined;
+	}
 }
 
 export function prepareLearningStateArguments(args: unknown, _fallbackStage: LearningStage): Record<string, unknown> {
@@ -158,8 +182,12 @@ export function prepareLearningStateArguments(args: unknown, _fallbackStage: Lea
 	const optionalBoolean = (keys: string[]): boolean | undefined => booleanValue(keys.map(key => input[key]).find(value => value !== undefined));
 	const optionalString = (keys: string[]): string | undefined => firstString(input, keys)?.trim() || undefined;
 
+	const currentStage = stageField(input.currentStage ?? input.stage);
+	const requestedNextStage = stageField(input.requestedNextStage ?? input.nextStage);
 	return {
 		readyForNextStage,
+		...(currentStage ? { currentStage } : {}),
+		...(requestedNextStage ? { requestedNextStage } : {}),
 		...(optionalString(["goalSummary", "goal", "objective"]) ? { goalSummary: optionalString(["goalSummary", "goal", "objective"]) } : {}),
 		...(optionalBoolean(["understandingReady", "understood", "understandingComplete"]) !== undefined ? { understandingReady: optionalBoolean(["understandingReady", "understood", "understandingComplete"]) } : {}),
 		...(optionalString(["planSummary", "plan", "summary"]) ? { planSummary: optionalString(["planSummary", "plan", "summary"]) } : {}),

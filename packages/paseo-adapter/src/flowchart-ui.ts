@@ -59,7 +59,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           const loading = el("div", "loading");
           loading.setAttribute("role", "status");
           loading.setAttribute("aria-live", "polite");
-          loading.append(el("div", "spinner"), el("strong", "", "Generating flowchart…"), el("span", "", "Reading the project and tracing its application flow"));
+          loading.append(el("div", "spinner"), el("strong", "", "Generating flowchart…"), el("span", "", "Reading up to 100 project files, excluding known secret files"));
           content.appendChild(loading);
           return;
         }
@@ -87,7 +87,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         drawGraph(diagram, state.graph);
         canvas.appendChild(diagram);
         content.appendChild(canvas);
-        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " source files" + (state.graph.truncated ? " · Large files were summarized" : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString());
+        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + (state.graph.model ? " · Model " + state.graph.model : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString());
         content.appendChild(meta);
       };
       const wrap = (value, max = 26, maxLines = 3) => {

@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { normalizeOllamaUrl, readOllamaConfig, registerOllama, saveOllamaUrl } from "../src/ollama.js";
+import { normalizeOllamaUrl, OllamaDiscoveryError, readOllamaConfig, registerOllama, saveOllamaUrl } from "../src/ollama.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -84,4 +84,29 @@ it("reports a stopped server and an empty local model list", async () => {
 	await expect(registerOllama(runtime, "http://127.0.0.1:11434", vi.fn(async () => { throw new Error("offline"); }) as typeof fetch)).rejects.toThrow(/Start it with ollama serve/);
 	await expect(registerOllama(runtime, "http://127.0.0.1:11434", vi.fn(async () => new Response('{"models":[]}')) as typeof fetch)).rejects.toThrow(/ollama pull/);
 	expect(runtime.registerProvider).not.toHaveBeenCalled();
+});
+
+it("distinguishes incompatible, malformed, and timed-out discovery from offline state", async () => {
+	const runtime = { registerProvider: vi.fn() } as unknown as ModelRuntime;
+	await expect(registerOllama(runtime, "http://127.0.0.1:11434", vi.fn(async () => new Response("not-json", { status: 200 })) as typeof fetch))
+		.rejects.toMatchObject({ code: "OLLAMA_INVALID_RESPONSE" } satisfies Partial<OllamaDiscoveryError>);
+	await expect(registerOllama(runtime, "http://127.0.0.1:11434", vi.fn(async () => new Response("", { status: 404 })) as typeof fetch))
+		.rejects.toMatchObject({ code: "OLLAMA_INCOMPATIBLE" } satisfies Partial<OllamaDiscoveryError>);
+	await expect(registerOllama(runtime, "http://127.0.0.1:11434", vi.fn(async () => { throw new DOMException("timeout", "TimeoutError"); }) as typeof fetch))
+		.rejects.toMatchObject({ code: "OLLAMA_TIMEOUT" } satisfies Partial<OllamaDiscoveryError>);
+});
+
+it("replaces stale model inventory when a server reconnects or changes models", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-student-ollama-reconnect-"));
+	directories.push(directory);
+	const runtime = await ModelRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null, refreshOnCreate: false });
+	let payload = { models: [{ name: "old-model" }] };
+	const fetchImpl = vi.fn(async () => new Response(JSON.stringify(payload), { status: 200 }));
+	await registerOllama(runtime, "http://127.0.0.1:11434", fetchImpl as typeof fetch);
+	await runtime.refresh({ allowNetwork: false, providers: ["ollama"] });
+	expect((await runtime.getAvailable("ollama")).map(model => model.id)).toEqual(["old-model"]);
+	payload = { models: [{ model: "new-model" }] };
+	await registerOllama(runtime, "http://127.0.0.1:11434", fetchImpl as typeof fetch);
+	await runtime.refresh({ allowNetwork: false, providers: ["ollama"] });
+	expect((await runtime.getAvailable("ollama")).map(model => model.id)).toEqual(["new-model"]);
 });

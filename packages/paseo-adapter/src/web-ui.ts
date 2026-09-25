@@ -459,17 +459,28 @@ export const studentUiScript = (ecosystemPort: number) => `
           const wrap = mount && mount.shadowRoot && mount.shadowRoot.querySelector(".wrap");
           const pageRoot = document.querySelector("#pi-student-ecosystem-page")?.shadowRoot?.querySelector(".page-root");
           if (!wrap || !pageRoot || !ecosystemState) return;
-          wrap.replaceChildren(element("div", "eyebrow", "ECOSYSTEM"));
-          wrap.appendChild(renderGithubQuick());
+		  wrap.replaceChildren(element("div", "eyebrow", "ECOSYSTEM"));
+		  wrap.appendChild(renderEnvironmentQuick());
+		  wrap.appendChild(renderGithubQuick());
           wrap.appendChild(renderDeploymentsQuick());
           pageRoot.replaceChildren();
           if (ecosystemView) {
             pageRoot.appendChild(renderPanel());
             positionEcosystemPage();
           }
-        };
+		};
 
-        const renderGithubQuick = () => {
+		const renderEnvironmentQuick = () => {
+		  const environment = ecosystemState.environment || {};
+		  const status = environment.status || "configured";
+		  const tone = status === "active" || status === "ready" ? "ok" : ["failed", "unsupported"].includes(status) ? "bad" : "muted";
+		  const section = element("div", "section");
+		  section.appendChild(element("div", tone, "Environment · " + status));
+		  if (environment.message) section.appendChild(element("div", "muted", environment.message));
+		  return section;
+		};
+
+		const renderGithubQuick = () => {
           const section = element("div", "section");
           const github = ecosystemState.github || {};
           const head = sectionHeader("GitHub", "github", githubOpen, () => { githubOpen = !githubOpen; renderEcosystem(); });

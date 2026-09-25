@@ -10,6 +10,12 @@ import { editorCompletionUiScript } from "@pi-student/paseo-adapter/editor-compl
 import { patchFileEditorSource } from "@pi-student/paseo-adapter/file-editor-patch";
 import { createEcosystemBridgeServer } from "@pi-student/paseo-adapter/ecosystem-bridge";
 import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
+import type { ExecutionContext } from "@pi-student/contracts";
+
+const context = (root: string, policy?: ExecutionContext["policy"], organizationId?: string): ExecutionContext => ({
+	workspacePath: root, identity: { kind: organizationId ? "student" : "personal" }, sandbox: { mode: "gondolin" },
+	policy, ...(organizationId ? { organizationId } : {}),
+});
 
 const require = createRequire(import.meta.url);
 const bundle = path.resolve(path.dirname(require.resolve("@getpaseo/cli/package.json")), "..", "server", "dist", "server", "web-ui", "_expo", "static", "js", "web", "index-1be98d8895969110732458bbaeac57b2.js");
@@ -24,6 +30,9 @@ describe("student file completion", () => {
 		const script = editorCompletionUiScript(6769).replace(/^\s*<script[^>]*>/, "").replace(/<\/script>\s*$/, "");
 		expect(() => new Script(script)).not.toThrow();
 		expect(script).toContain("AI suggestions send excerpts of the open file");
+		expect(script).toContain("No nearby files are included");
+		expect(script).toContain("The selected model is unavailable. Choose another model.");
+		expect(script).toContain('status.textContent = "Using " + body.model');
 		expect(script).toContain("local(false)");
 		expect(script).toContain("enabled: value.enabled === true");
 	});
@@ -33,16 +42,16 @@ describe("student file completion", () => {
 		const model = { provider: "openai", id: "small", name: "Small", reasoning: false, cost: { input: 1, output: 1 } };
 		const runtime = { getAvailable: async () => [model], getProviderAuthStatus: () => ({ configured: true }) };
 		try {
-			const noEditing = new EditorCompletionService(async () => ({ runtime: runtime as never, policy: { projectId: "project", version: 1, settings: { ...DEFAULT_CAPABILITY_POLICY, fileEditing: false } } }), path.join(root, "editing.json"));
+			const noEditing = new EditorCompletionService(async () => ({ runtime: runtime as never, context: context(root, { projectId: "project", version: 1, settings: { ...DEFAULT_CAPABILITY_POLICY, fileEditing: false } }) }), path.join(root, "editing.json"));
 			expect(await noEditing.models(root)).toEqual([]);
 			await expect(noEditing.suggest(root, { filename: "main.ts", content: "hello", cursor: 5, model: "auto" })).rejects.toMatchObject({ status: 403 });
-			const noModels = new EditorCompletionService(async () => ({ runtime: runtime as never, managed: true, policy: { projectId: "project", version: 1, settings: DEFAULT_CAPABILITY_POLICY } }), path.join(root, "models.json"));
+			const noModels = new EditorCompletionService(async () => ({ runtime: runtime as never, context: context(root, { projectId: "project", version: 1, settings: DEFAULT_CAPABILITY_POLICY }, "org") }), path.join(root, "models.json"));
 			expect(await noModels.models(root)).toEqual([]);
 			await expect(noModels.suggest(root, { filename: "main.ts", content: "hello", cursor: 5, model: "auto" })).rejects.toMatchObject({ status: 403 });
 		} finally { await rm(root, { recursive: true, force: true }); }
 	});
 
-	it("uses approved models and bounded nearby code, and rejects unsafe file paths", async () => {
+	it("uses approved models and only the open file, and rejects unsafe file paths", async () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), "pi-completion-"));
 		const completeSimple = vi.fn(async () => ({ stopReason: "stop", content: [{ type: "text", text: "World" }] }));
 		const models = [
@@ -52,7 +61,7 @@ describe("student file completion", () => {
 		const runtime = { getAvailable: async () => models, getProviderAuthStatus: () => ({ configured: true }), completeSimple };
 		const policy = { projectId: "project", version: 1, settings: { ...DEFAULT_CAPABILITY_POLICY, models: ["openai/small"] } };
 		const beforeRequest = vi.fn(async () => {});
-		const service = new EditorCompletionService(async () => ({ runtime: runtime as never, policy, approvedProviders: ["openai"], beforeRequest }), path.join(root, "usage.json"));
+		const service = new EditorCompletionService(async () => ({ runtime: runtime as never, context: context(root, policy), beforeRequest }), path.join(root, "usage.json"));
 		try {
 			await mkdir(path.join(root, "src"));
 			await writeFile(path.join(root, "src", "helper.ts"), "export const nearbySymbol = 1;");
@@ -60,10 +69,15 @@ describe("student file completion", () => {
 			expect(await service.models(root)).toEqual([{ id: "openai/small", label: "Small" }]);
 			const result = await service.suggest(root, { filename: "src/main.ts", content: "const greeting = 'Hello'", cursor: 24, model: "auto" });
 			expect(result.suggestion).toBe("World");
+			expect(result.model).toBe("openai/small");
+			expect(completeSimple.mock.calls[0]![0]).toMatchObject({ provider: "openai", id: "small" });
 			expect(beforeRequest).toHaveBeenCalledWith("openai", "small", "off");
 			const prompt = completeSimple.mock.calls[0]![1].messages[0].content[0].text;
-			expect(prompt).toContain("nearbySymbol");
+			expect(prompt).not.toContain("nearbySymbol");
 			expect(prompt).not.toContain("DO_NOT_SEND");
+			for (const filename of ["src/credentials.json", "src/private-key.ts", "src/service-account.json", "src/.env.local", "src/.ssh/config.json"]) {
+				await expect(service.suggest(root, { filename, content: "secret", cursor: 6, model: "auto" })).rejects.toMatchObject({ status: 403 });
+			}
 			await expect(service.suggest(root, { filename: "../other.ts", content: "hello", cursor: 5, model: "auto" })).rejects.toThrow("unavailable");
 			await expect(service.suggest(root, { filename: "src/main.ts", content: "hello", cursor: 5, model: "other/blocked" })).rejects.toThrow("not approved");
 		} finally { await rm(root, { recursive: true, force: true }); }
@@ -73,7 +87,7 @@ describe("student file completion", () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), "pi-completion-limit-"));
 		const model = { provider: "openai", id: "small", name: "Small", reasoning: false, cost: { input: 1, output: 1 } };
 		const completeSimple = vi.fn(async () => ({ stopReason: "stop", content: [{ type: "text", text: "x" }] }));
-		const environment = async () => ({ runtime: { getAvailable: async () => [model], getProviderAuthStatus: () => ({ configured: true }), completeSimple } as never });
+		const environment = async () => ({ runtime: { getAvailable: async () => [model], getProviderAuthStatus: () => ({ configured: true }), completeSimple } as never, context: context(root) });
 		const usagePath = path.join(root, "usage.json");
 		const service = new EditorCompletionService(environment, usagePath);
 		try {

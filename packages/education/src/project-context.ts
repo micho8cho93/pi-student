@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
+import { isSensitiveContextPath } from "@pi-student/shared/file-context";
 
 /** A compact snapshot used to make routing and student questions more useful. */
 export interface ProjectContext {
@@ -39,7 +40,7 @@ export async function inspectProjectContext(runtime: SandboxRuntime): Promise<Pr
 	const relativeFiles = files
 		.map((file) => path.posix.relative(runtime.getWorkspacePath(), file))
 		.filter(Boolean)
-		.filter((file) => !file.startsWith(".git/") && !file.startsWith("node_modules/"));
+		.filter((file) => !file.startsWith(".git/") && !file.startsWith("node_modules/") && !isSensitiveContextPath(file));
 	const fileSet = new Set(relativeFiles);
 	const importantFiles = relativeFiles
 		.filter((file) => IMPORTANT_FILES.includes(file as (typeof IMPORTANT_FILES)[number]) || /^(src|tests?|app)\/[^/]+\.(ts|tsx|js|jsx|py|rs|go|java)$/.test(file))

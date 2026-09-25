@@ -6,7 +6,8 @@ import {
 	type ExtensionContext,
 	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import type { IdentityProvider, ModelAdmissionProvider, PolicyProvider, TelemetrySink, RuntimeConfiguration } from "@pi-student/contracts";
+import type { ExecutionContext, IdentityProvider, ModelAdmissionProvider, PolicyProvider, TelemetrySink, RuntimeConfiguration } from "@pi-student/contracts";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
 import { LearningEventBus } from "@pi-student/telemetry/events";
@@ -26,11 +27,22 @@ export interface StudentRuntimeServices {
 	modelAdmission?: ModelAdmissionProvider;
 	classroom?: ClassroomRuntimeServices;
 	contextStore?: TeacherContextStore;
-	configureEnvironment?: (projectId?: string) => Promise<void>;
+	configureEnvironment?: (selection: TeacherContext) => Promise<void>;
+	/** Applies a freshly resolved context to the running sandbox (network policy, readiness). */
+	reconcileEnvironment?: (context: ExecutionContext) => Promise<void>;
+	executionContext?: () => Promise<ExecutionContext>;
+	bindSession?: (session: Pick<SessionManager, "getCwd" | "getSessionId">) => Promise<void>;
+	preferredFallbackModelId?: (provider: string, modelId: string) => string | undefined;
 	recordStore?: LearningRecordStore;
 }
 
 const personalIdentity: IdentityProvider = { getIdentity: async () => ({ kind: "personal" }) };
+
+/** The host directory is only a local authorization binding, never telemetry. */
+export function telemetrySelection(context: TeacherContext): TeacherContext {
+	const { workspacePath: _localWorkspacePath, ...recorded } = context;
+	return recorded;
+}
 
 export function createTeacherTelemetryExtension(workflow: WorkflowController, sandbox: SandboxRuntime, services: StudentRuntimeServices = {}): ExtensionFactory {
 	return (pi) => {
@@ -59,7 +71,8 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			catch { ctx.ui.notify("Could not save or sync the learning record. Use /sync to retry.", "warning"); }
 		};
 		const startRecord = async (context: TeacherContext, ctx: ExtensionContext) => {
-			await services.configureEnvironment?.(context.projectId);
+			await services.configureEnvironment?.(context);
+			context = telemetrySelection(context);
 			let studentId: string | undefined;
 			try { studentId = (await identityProvider.getIdentity()).userId; }
 			catch { /* Offline recording remains available. */ }
@@ -76,7 +89,7 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 		};
 		if (services.classroom) {
 			createStudentClassroomExtension(services.classroom, async (context, ctx) => {
-				if (JSON.stringify(activeContext) === JSON.stringify(context)) return;
+				if (JSON.stringify(activeContext) === JSON.stringify(telemetrySelection(context))) return;
 				await checkpoint(ctx);
 				await startRecord(context, ctx);
 				await safeCheckpoint(ctx);

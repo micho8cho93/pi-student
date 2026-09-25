@@ -24,17 +24,30 @@ describe("institutional environment resolution", () => {
 	it("leaves standalone classrooms on the existing sandbox path", async () => {
 		expect(await new SupabaseInstitutionalEnvironmentProvider(client(null, false)).resolve("project-1")).toBeUndefined();
 	});
+	it("rejects an unreadable class relationship", async () => {
+		const database = client(null);
+		database.from = (() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { classes: null }, error: null }) }) }) })) as typeof database.from;
+		await expect(new SupabaseInstitutionalEnvironmentProvider(database).resolve("project-1")).rejects.toThrow("class scope");
+	});
 	it("filters disabled/capability-restricted extensions before runtime configuration", async () => {
 		const policy: EffectivePolicy = { projectId: "project-1", version: 1, settings: { ...DEFAULT_CAPABILITY_POLICY, internet: false } };
 		const payload = { organizationId: org, projectId: "project-1", blockedSites: ["youtube.com"], profile: base,
-			skills: [{ id: "read", name: "Read", organizationId: org, capabilities: [] }, { id: "net", name: "Net", organizationId: org, capabilities: ["network"] }],
-			mcps: [{ id: "mcp", name: "MCP", transport: "http", organizationId: org, capabilities: ["secrets"] }] };
+			skills: [{ id: "read", name: "Read", organizationId: org, scope: "organization", enabled: true, approvalStatus: "approved", capabilities: [] }, { id: "net", name: "Net", organizationId: org, scope: "organization", enabled: true, approvalStatus: "approved", capabilities: ["network"] }],
+			mcps: [{ id: "mcp", name: "MCP", transport: "http", organizationId: org, scope: "organization", enabled: true, approvalStatus: "approved", capabilities: ["secrets"] }] };
 		const result = await new SupabaseInstitutionalEnvironmentProvider(client(payload)).resolve("project-1", policy);
 		expect(result?.sandbox.profile).toEqual(base);
 		expect(result?.sandbox.internetAllowed).toBe(false);
 		expect(result?.sandbox.blockedHosts).toEqual(["youtube.com"]);
 		expect(result?.skills?.map(skill => skill.id)).toEqual(["read"]);
 		expect(result?.mcps).toEqual([]);
+	});
+	it("accepts the SQL NULL scope columns emitted by resolve_institutional_environment", async () => {
+		const skill = { id: "s", name: "Skill", description: null, organizationId: org, classId: null, projectId: null, scope: "organization", enabled: true, approvalStatus: "approved", capabilities: [] };
+		const payload = { organizationId: org, projectId: "project-1", blockedSites: [], profile: null, skills: [skill], mcps: [] };
+		const result = await new SupabaseInstitutionalEnvironmentProvider(client(payload)).resolve("project-1");
+		expect(result?.skills).toEqual([{ id: "s", name: "Skill", organizationId: org, scope: "organization", enabled: true, approvalStatus: "approved", capabilities: [] }]);
+		const foreignClass = { ...payload, skills: [{ ...skill, scope: "class", classId: "another-class" }] };
+		await expect(new SupabaseInstitutionalEnvironmentProvider(client(foreignClass)).resolve("project-1")).rejects.toThrow("scope is invalid");
 	});
 	it("rejects malformed blocked sites from the control plane", async () => {
 		const payload = { organizationId: org, projectId: "project-1", blockedSites: ["https://example.com/path"], profile: null, skills: [], mcps: [] };
@@ -46,8 +59,8 @@ describe("institutional environment resolution", () => {
 			artifactId: "abcdefghijklmnop", sha256: "f".repeat(64), scope: "organization", mountPath: "/datasets/../private", access: "read-only" }] }, org)).toThrow();
 		expect(() => validateProfile({ ...base, packages: [{ name: "numpy", version: "latest", integrity: "" }] }, org)).toThrow();
 	});
-	it("rejects a failed or unverified image", () => {
-		expect(() => validateProfile({ ...base, buildStatus: "failed" as "ready" }, org)).toThrow();
+	it("preserves build state while rejecting an unverified image", () => {
+		expect(() => validateProfile({ ...base, buildStatus: "failed" }, org)).not.toThrow();
 		expect(() => validateProfile({ ...base, imageDigest: "not-pinned" }, org)).toThrow();
 	});
 });

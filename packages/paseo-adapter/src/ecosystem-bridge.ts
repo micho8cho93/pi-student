@@ -17,7 +17,8 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { generateFlowchart } from "./flowchart.js";
 import { CompletionError, EditorCompletionService, type CompletionRequest } from "./editor-completion.js";
 import { providerCatalog } from "@pi-student/shared/provider-catalog";
-import { approvedProvidersForCurrentProject, currentPiUserId, supabaseMcpAvailableForCurrentProject } from "@pi-student/supabase-adapter/provider-approvals";
+import { mcpCatalog } from "@pi-student/shared/extension-catalog";
+import { approvedProvidersForCurrentProject, currentPiUserId } from "@pi-student/supabase-adapter/provider-approvals";
 import { createPiSupabaseClient } from "@pi-student/supabase-adapter/auth";
 import { readSupabaseConfig } from "@pi-student/supabase-adapter/config";
 import { SupabaseGovernancePolicyProvider } from "@pi-student/supabase-adapter/governance-policy";
@@ -25,9 +26,16 @@ import { SupabaseIdentityProvider } from "@pi-student/supabase-adapter/identity-
 import { SupabaseModelAdmissionProvider } from "@pi-student/supabase-adapter/model-admission";
 import { readTeacherContext } from "@pi-student/telemetry/local-store";
 import { DirectModelProvider } from "@pi-student/runtime/model-provider";
+import { resolveExecutionContext } from "@pi-student/runtime/execution-context";
 import { StoredPolicyProvider } from "@pi-student/policy/provider";
 import { beginSupabaseMcpLogin, finishSupabaseMcpLogin, supabaseMcpConnected } from "@pi-student/shared/supabase-mcp-oauth";
 import { randomUUID } from "node:crypto";
+import { SupabaseExecutionScopeProvider } from "@pi-student/supabase-adapter/execution-scope";
+import { SupabaseInstitutionalEnvironmentProvider } from "@pi-student/supabase-adapter/institutional-environment";
+import { SandboxManager } from "@pi-student/sandbox/sandbox-manager";
+import { GondolinSandboxProvider } from "@pi-student/sandbox-gondolin/provider";
+import type { ExecutionContext } from "@pi-student/contracts";
+import { assertExecutionEnvironment, authorizeExtension } from "@pi-student/runtime/extension-authorization";
 
 export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
@@ -52,39 +60,45 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 	const activity = new Map<string, { progress?: PublishProgress; publishing: boolean }>();
 	const flowchartJobs = new Map<string, Promise<Awaited<ReturnType<typeof generateFlowchart>>>>();
 	let providerRuntime: ModelRuntime | undefined;
-	let providerRuntimeReady = false;
 	let codexLogin: { status: string; message?: string; url?: string; code?: string; prompt?: { type: string; message: string; options?: ReadonlyArray<{ id: string; label: string; description?: string }> }; answer?: (value: string) => void; error?: string } | undefined;
 	let supabaseLogin: { state: string; userId: string; startedAt: number } | undefined;
 	const getProviderRuntime = async () => {
 		providerRuntime ??= await createModelRuntime();
-		if (!providerRuntimeReady) { await providerRuntime.refresh({ allowNetwork: false }); providerRuntimeReady = true; }
+		await providerRuntime.refresh({ allowNetwork: false });
 		return providerRuntime;
 	};
 	const completionSessionId = randomUUID();
-	const completions = new EditorCompletionService(async () => {
+	const resolveModelExecution = async (root: string) => {
 		const runtime = await getProviderRuntime();
 		const context = await readTeacherContext();
 		const config = readSupabaseConfig();
-		if (!context.organizationId) return { runtime, policy: context.policy };
-		if (!context.projectId || !config) throw new CompletionError("The selected class project is unavailable. Reconnect before using AI completion.", 403);
+		if (context.projectId && !config) throw new CompletionError("The selected class project is unavailable. Reconnect before using AI completion.", 403);
+		if (!config) return { runtime, context: await resolveExecutionContext({ workspacePath: root, selection: context,
+			identityProvider: { getIdentity: async () => ({ kind: "personal" as const }) },
+			policyProvider: new StoredPolicyProvider(readTeacherContext) }) };
 		const client = createPiSupabaseClient(config);
 		const direct = await DirectModelProvider.create(runtime);
 		const gatewayUrl = process.env.PI_STUDENT_MODEL_GATEWAY_URL?.trim();
 		const governance = new SupabaseGovernancePolicyProvider(client, new StoredPolicyProvider(readTeacherContext), gatewayUrl ? {
 			url: gatewayUrl, configure: (projectId, url, profiles, token) => direct.configureHostedProfiles(projectId, url, profiles, token),
 		} : undefined, () => runtime.getModels().filter(model => model.provider !== "institution").map(model => ({ provider: model.provider, id: model.id })));
-		const identity = await new SupabaseIdentityProvider(client, "student").getIdentity();
-		if (identity.kind !== "student") throw new Error("Sign in to use completion models for this class project.");
-		const policy = await governance.resolvePolicy({ identity, projectId: context.projectId });
-		if (!policy) throw new Error("Project model policy is unavailable.");
-		const approvedProviders = await approvedProvidersForCurrentProject();
-		if (!approvedProviders) throw new Error("Project provider approval is unavailable.");
+		const resolvedContext = await resolveExecutionContext({ workspacePath: root, selection: context,
+			identityProvider: new SupabaseIdentityProvider(client, "student"),
+			policyProvider: governance, scopeProvider: new SupabaseExecutionScopeProvider(client),
+			environmentProvider: new SupabaseInstitutionalEnvironmentProvider(client) });
+		const sandboxManager = new SandboxManager(root, { provider: new GondolinSandboxProvider() });
+		const localEnvironment = sandboxManager.inspect(resolvedContext.sandbox);
+		const executionContext: ExecutionContext = resolvedContext.environment
+			? { ...resolvedContext, environment: { ...resolvedContext.environment, capabilities: localEnvironment.capabilities } }
+			: resolvedContext;
 		const admission = new SupabaseModelAdmissionProvider(client, (token, sessionId, thinking) => direct.refreshHostedToken(token, sessionId, thinking));
-		return { runtime, policy, managed: true, approvedProviders, beforeRequest: async (provider: string, modelId: string, thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => {
-			const decision = await admission.check(context.projectId!, provider, modelId, thinking, completionSessionId);
+		return { runtime, context: executionContext, beforeRequest: async (provider: string, modelId: string, thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => {
+			if (!executionContext.projectId) return;
+			const decision = await admission.check(executionContext.projectId, provider, modelId, thinking, completionSessionId);
 			if (decision.blocked) throw new CompletionError("This model is blocked by the project approval or budget.", 403);
 		} };
-	});
+	};
+	const completions = new EditorCompletionService(resolveModelExecution);
 	const requireApprovedProvider = async (providerId: string) => {
 		const approved = await approvedProvidersForCurrentProject();
 		if (approved && !approved.includes(providerId)) throw new Error("This model provider is not approved for the selected class project.");
@@ -134,7 +148,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				const activeProject = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId") ?? undefined, projectPath);
 				const currentActivity = activity.get(activeProject) ?? { publishing: false };
 				const state = await readEcosystemState(activeProject, github);
-				return json(response, 200, { ...state, ...currentActivity });
+				return json(response, 200, { ...state, ...currentActivity, environment: await resolvePaseoEnvironmentState(activeProject, resolveModelExecution) });
 			}
 			if (request.method === "POST" && url.pathname === "/flowchart") {
 				const workspaceId = url.searchParams.get("workspaceId");
@@ -145,7 +159,8 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 					: await resolvePaseoProjectPath(paseoHome, projectName!);
 				let job = flowchartJobs.get(activeProject);
 				if (!job) {
-					job = getProviderRuntime().then(runtime => generateFlowchart(activeProject, runtime));
+					job = resolveModelExecution(activeProject).then(({ runtime, context, beforeRequest }) =>
+						generateFlowchart(activeProject, runtime, context, beforeRequest));
 					flowchartJobs.set(activeProject, job);
 					void job.finally(() => { if (flowchartJobs.get(activeProject) === job) flowchartJobs.delete(activeProject); }).catch(() => {});
 				}
@@ -161,11 +176,13 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				return json(response, 200, { providers: rows, ollamaUrl: ollama?.url ?? DEFAULT_OLLAMA_URL, codexLogin: codexLogin ? { ...codexLogin, answer: undefined } : undefined });
 			}
 			if (request.method === "GET" && url.pathname === "/providers/supabase") {
-				const available = await supabaseMcpAvailableForCurrentProject();
+				const activeProject = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId") ?? undefined, projectPath);
+				const available = await paseoSupabaseMcpAvailable(activeProject, resolveModelExecution);
 				return json(response, 200, { available, connected: available ? await supabaseMcpConnected(await currentPiUserId()) : false });
 			}
 			if (request.method === "POST" && url.pathname === "/providers/supabase/login") {
-				if (!await supabaseMcpAvailableForCurrentProject()) return json(response, 403, { error: "Your school and teacher have not enabled Supabase MCP for this project." });
+				const activeProject = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId") ?? undefined, projectPath);
+				if (!await paseoSupabaseMcpAvailable(activeProject, resolveModelExecution)) return json(response, 403, { error: "Your school, teacher, and sandbox have not enabled Supabase MCP for this project." });
 				const userId = await currentPiUserId();
 				const state = randomUUID();
 				supabaseLogin = { state, userId, startedAt: Date.now() };
@@ -282,6 +299,35 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			return json(response, error instanceof CompletionError ? error.status : 500, { error: safeError(error) });
 		}
 	});
+}
+
+async function resolvePaseoEnvironmentState(root: string, resolve: (root: string) => Promise<{ context: Pick<ExecutionContext, "sandbox" | "environment"> }>) {
+	const provider = new GondolinSandboxProvider();
+	try {
+		const resolved = await resolve(root);
+		const manager = new SandboxManager(root, { provider });
+		const inspected = manager.inspect(resolved.context.sandbox);
+		const control = resolved.context.environment;
+		if (control && ["pending", "building", "failed", "unsupported"].includes(control.status)) {
+			return { ...inspected, status: control.status, requiredCapabilities: control.requiredCapabilities,
+				message: control.status === "failed" ? "This coding environment failed to build." : control.status === "pending" || control.status === "building" ? "This coding environment is still being prepared." : inspected.message };
+		}
+		return inspected;
+	} catch {
+		const capabilities = provider.capabilities("gondolin");
+		return { status: "failed" as const, provider: capabilities.provider, capabilities, requiredCapabilities: ["workspace" as const], message: "Environment state is unavailable. Reconnect and try again." };
+	}
+}
+
+async function paseoSupabaseMcpAvailable(root: string, resolve: (root: string) => Promise<{ context: ExecutionContext }>): Promise<boolean> {
+	try {
+		const { context } = await resolve(root);
+		return Boolean(context.mcps?.some(item => item.endpoint === "https://mcp.supabase.com/mcp" && authorizeExtension(
+			context, item, "mcp", "list", "implement", mcpCatalog.find(catalog => catalog.endpoint === item.endpoint),
+		).allowed));
+	} catch {
+		return false;
+	}
 }
 
 export async function resolvePaseoWorkspacePath(

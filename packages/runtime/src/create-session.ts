@@ -1,4 +1,6 @@
 import { createApprovedExtensions } from "./approved-extensions.js";
+import { authorizeExtension } from "./extension-authorization.js";
+import { mcpCatalog, skillCatalog } from "@pi-student/shared/extension-catalog";
 import { registerLearnMode } from "@pi-student/education/extension";
 import {
 	type AgentSessionRuntime,
@@ -22,6 +24,7 @@ import { createSandboxGrepTool, createSandboxToolDefinitions, readSandboxMode } 
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import { WorkflowController } from "@pi-student/education/workflow-controller";
 import { StudentQuestionLoop } from "@pi-student/education/student-question-loop";
+import { displayLearningStage } from "@pi-student/education/stage";
 import { inspectProjectContext, projectContextFacts, type ProjectContext } from "@pi-student/education/project-context";
 import { routeIntent, type IntentRoute } from "@pi-student/education/intent";
 import { createStudentAskExtension } from "./student-ask.js";
@@ -30,6 +33,7 @@ import { createStudentPlanExtension } from "./student-plan.js";
 import { createSaveToDesktopExtension } from "./save-to-desktop.js";
 import { EDUCATIONAL_SYSTEM_PROMPT, stageGuidance } from "./prompts.js";
 import { createModelRuntime, findFallbackModel, normalizeFallbackThinkingLevel } from "./model-runtime.js";
+import { assertExecutionModel, refreshSessionModelInventory, selectExecutionModel, selectFallbackModel } from "./model-selection.js";
 import { classifyTerminalCommand, isSafeInspectionCommand, isSafeVerificationCommand, isWorkspacePath } from "./command-policy.js";
 import { formatProviderErrorMessage } from "./ui.js";
 import { createBundledThemes, DEFAULT_THEME } from "./themes.js";
@@ -97,9 +101,17 @@ export async function createLearningAgentRuntime(
 	options: LearningAgentRuntimeOptions = {},
 ): Promise<LearningAgentRuntime> {
 	const sandboxRuntime = requireSandboxRuntime(sandbox);
+	if (options.services?.executionContext) await refreshSessionModelInventory(modelRuntime, await options.services.executionContext());
 	if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(cwd);
 	const agentDir = getAgentDir();
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
+		await options.services?.bindSession?.(sessionManager);
+		const executionContext = await options.services?.executionContext?.();
+		const savedModel = sessionManager.buildSessionContext().model;
+		const sessionModel = executionContext
+			? (await selectExecutionModel(modelRuntime, executionContext,
+				savedModel ? undefined : model ? `${model.provider}/${model.id}` : undefined, sessionManager)).model
+			: model;
 		workflow = restoreWorkflow(sessionManager, runtimeCwd);
 		if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(runtimeCwd);
 		const sandboxCwd = sandboxRuntime.getWorkspacePath();
@@ -111,9 +123,9 @@ export async function createLearningAgentRuntime(
 				noSkills: true,
 				extensionFactories: [
 					createSandboxExtension(sandboxRuntime),
-					createLearningExtension(workflow, modelRuntime, sandboxRuntime),
+					createLearningExtension(workflow, modelRuntime, sandboxRuntime, options.services),
 					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services),
-			createApprovedExtensions(options.services),
+					createApprovedExtensions(options.services, () => workflow.getStage()),
 				],
 				extensionsOverride: removeLlamaCommand,
 				themesOverride: addBundledThemes,
@@ -140,7 +152,7 @@ export async function createLearningAgentRuntime(
 			resourceLoader: services.resourceLoader,
 			sessionManager,
 			sessionStartEvent,
-			model,
+			model: sessionModel,
 			thinkingLevel: options.thinkingLevel,
 			// The SDK treats `tools` as a permanent session allowlist. Register the
 			// union of every stage's tools, then narrow the active set below. Passing
@@ -148,12 +160,23 @@ export async function createLearningAgentRuntime(
 			// activate for the lifetime of the session.
 			tools: [...workflow.getRegisteredTools()],
 		});
-		sessionResult.session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
-		guardCapabilitySession(sessionResult.session, capabilityState(workflow));
+		await refreshApprovedExtensionTools(sessionResult.session, workflow, options.services);
+		guardCapabilitySession(sessionResult.session, capabilityState(workflow), async selected => {
+			const context = await options.services?.executionContext?.();
+			if (!context) return;
+			await options.services?.reconcileEnvironment?.(context);
+			await refreshApprovedExtensionTools(sessionResult.session, workflow, options.services, context);
+			capabilityState(workflow).effective = context.policy;
+			await refreshSessionModelInventory(modelRuntime, context);
+			if (!selected) throw new Error("Select an available model before continuing.");
+			await assertExecutionModel(modelRuntime, context, selected);
+		});
 		const sessionWorkflow = workflow;
 		sessionWorkflow.onChange(() => {
 			sessionManager.appendCustomEntry("pi-student-workflow", structuredClone(sessionWorkflow.state));
-			sessionResult.session.setActiveToolsByName([...sessionWorkflow.getAllowedTools(),"school_skill","school_mcp"]);
+			void refreshApprovedExtensionTools(sessionResult.session, sessionWorkflow, options.services).catch(() => {
+				sessionResult.session.setActiveToolsByName([...sessionWorkflow.getAllowedTools()]);
+			});
 		});
 		return {
 			...sessionResult,
@@ -179,7 +202,7 @@ export async function createLearningAgentRuntime(
 	};
 }
 
-function createLearningExtension(workflow: WorkflowController, modelRuntime: ModelRuntime, sandbox: SandboxRuntime): ExtensionFactory {
+function createLearningExtension(workflow: WorkflowController, modelRuntime: ModelRuntime, sandbox: SandboxRuntime, services?: StudentRuntimeServices): ExtensionFactory {
 	const questionLoop = new StudentQuestionLoop();
 	return (pi) => {
 		const exploration = registerLearnMode(pi, workflow, sandbox);
@@ -249,9 +272,15 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 		createSaveToDesktopExtension(workflow, sandbox)(pi);
 		createStudentDictationExtension(capabilityState(workflow))(pi);
 		createProjectCapabilitiesExtension(capabilityState(workflow), sandbox)(pi);
+		let stopStageStatus: (() => void) | undefined;
 		pi.on("session_start", async (_event, ctx) => {
 			if (!sandbox.isRunning()) await sandbox.start(workflow.state.cwd);
 			fallbackAttempted = false;
+			// One indicator for every UI (TUI footer, Paseo RPC status), driven only by the controller's stage.
+			stopStageStatus?.();
+			const stageStatusKey = "pi-student-stage";
+			ctx.ui.setStatus(stageStatusKey, `stage · ${displayLearningStage(workflow.getStage())}`);
+			stopStageStatus = workflow.onStageChange(stage => ctx.ui.setStatus(stageStatusKey, `stage · ${displayLearningStage(stage)}`));
 			ctx.ui.setWorkingMessage("Understanding the request · Esc to stop");
 			ctx.ui.setHiddenThinkingLabel("Work notes hidden · select this line to review them");
 			if (ctx.mode === "tui") {
@@ -294,7 +323,13 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 			const current = ctx.model;
 			const shouldFallback = !fallbackAttempted && current && /429|quota|rate limit|resource exhausted|\b(502|503|504)\b|temporarily unavailable|overloaded/i.test(rawError);
 			if (shouldFallback) {
-				const fallback = findFallbackModel(modelRuntime, current, model => modelAllowed(capabilityState(workflow).settings, model));
+				const controls = capabilityState(workflow);
+				const context = await services?.executionContext?.();
+				const preferred = services?.preferredFallbackModelId?.(current.provider, current.id);
+				const fallback = context
+					? (await selectFallbackModel(modelRuntime, context, current, preferred))?.model
+					: findFallbackModel(modelRuntime, current, model =>
+						!(controls.effective?.sourceVersions?.organization && !controls.settings.models.length) && modelAllowed(controls.settings, model));
 				if (fallback) {
 					fallbackAttempted = true;
 					const requestedLevel = pi.getThinkingLevel();
@@ -303,10 +338,13 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 						const permitted = allowedReasoningLevels(capabilityState(workflow).settings, fallback);
 						const normalized = normalizeFallbackThinkingLevel(fallback, requestedLevel);
 						pi.setThinkingLevel(permitted.includes(normalized) ? normalized : permitted[0]!);
+						ctx.ui.setStatus("pi-model-fallback", `Fallback: ${current.provider}/${current.id} → ${fallback.provider}/${fallback.id}`);
+						ctx.ui.notify(`Provider unavailable. Switched to ${fallback.provider}/${fallback.id}.`, "warning");
 						event.message.errorMessage = `${formatProviderErrorMessage(rawError)} Switching to ${fallback.name || fallback.id} and retrying.`;
 						return;
 					}
 				}
+				if (preferred) ctx.ui.notify(`Configured fallback ${preferred} is unavailable. Select another approved model.`, "warning");
 			}
 			event.message.errorMessage = formatProviderErrorMessage(rawError);
 		});
@@ -321,6 +359,8 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 		});
 		pi.on("session_shutdown", async () => {
 			stopProgressTimer();
+			stopStageStatus?.();
+			stopStageStatus = undefined;
 			await sandbox.stop();
 		});
 		pi.on("tool_call", async (event) => {
@@ -532,6 +572,25 @@ function createSandboxExtension(sandbox: SandboxRuntime): ExtensionFactory {
 	};
 }
 
+async function refreshApprovedExtensionTools(
+	session: AgentSession,
+	workflow: WorkflowController,
+	services: StudentRuntimeServices | undefined,
+	knownContext?: import("@pi-student/contracts").ExecutionContext,
+): Promise<void> {
+	const tools = [...workflow.getAllowedTools()];
+	// Drop previously exposed school tools synchronously on a workflow/control
+	// change. The fresh snapshot below can only add them back after authorization.
+	session.setActiveToolsByName([...new Set(tools)]);
+	const context = knownContext ?? await services?.executionContext?.();
+	if (context) {
+		const stage = workflow.getStage();
+		if (context.skills?.some(item => item.artifactDigest === skillCatalog[0]?.artifactDigest && authorizeExtension(context, item, "skill", "list", stage).allowed)) tools.push("school_skill");
+		if (context.mcps?.some(item => authorizeExtension(context, item, "mcp", "list", stage, mcpCatalog.find(entry => entry.endpoint === item.endpoint)).allowed)) tools.push("school_mcp");
+	}
+	session.setActiveToolsByName([...new Set(tools)]);
+}
+
 export async function createLearningAgentSession(
 	cwd: string,
 	workflow: WorkflowController,
@@ -541,17 +600,24 @@ export async function createLearningAgentSession(
 	options: Pick<LearningAgentRuntimeOptions, "services"> = {},
 ): Promise<LearningAgentSession> {
 	const runtime = modelRuntime ?? (await createModelRuntime());
+	if (options.services?.executionContext) await refreshSessionModelInventory(runtime, await options.services.executionContext());
 	const sandboxRuntime = requireSandboxRuntime(sandbox);
 	if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(cwd);
+	const sessionManager = SessionManager.inMemory(cwd);
+	await options.services?.bindSession?.(sessionManager);
+	const executionContext = await options.services?.executionContext?.();
+	const sessionModel = executionContext
+		? (await selectExecutionModel(runtime, executionContext, model ? `${model.provider}/${model.id}` : undefined, sessionManager)).model
+		: model;
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: sandboxRuntime.getWorkspacePath(),
 		agentDir: getAgentDir(),
 		noSkills: true,
 		extensionFactories: [
 			createSandboxExtension(sandboxRuntime),
-			createLearningExtension(workflow, runtime, sandboxRuntime),
+			createLearningExtension(workflow, runtime, sandboxRuntime, options.services),
 			createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services),
-			createApprovedExtensions(options.services),
+			createApprovedExtensions(options.services, () => workflow.getStage()),
 		],
 		themesOverride: addBundledThemes,
 	});
@@ -560,24 +626,37 @@ export async function createLearningAgentSession(
 	const { session } = await createAgentSession({
 		cwd: sandboxRuntime.getWorkspacePath(),
 		modelRuntime: runtime,
-		model,
+		model: sessionModel,
 		resourceLoader,
 		tools: [...workflow.getRegisteredTools()],
-		sessionManager: SessionManager.inMemory(sandboxRuntime.getWorkspacePath()),
+		sessionManager,
 	});
-	session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
-	guardCapabilitySession(session, capabilityState(workflow));
+	await refreshApprovedExtensionTools(session, workflow, options.services);
+	guardCapabilitySession(session, capabilityState(workflow), async selected => {
+		const context = await options.services?.executionContext?.();
+		if (!context) return;
+		await options.services?.reconcileEnvironment?.(context);
+		await refreshApprovedExtensionTools(session, workflow, options.services, context);
+		capabilityState(workflow).effective = context.policy;
+		await refreshSessionModelInventory(runtime, context);
+		if (!selected) throw new Error("Select an available model before continuing.");
+		await assertExecutionModel(runtime, context, selected);
+	});
 	const unsubscribeFromStages = workflow.onChange(() => {
 		// Stage changes are committed by the workflow layer; sync Pi's active
 		// tools immediately before the next prompt is accepted.
-		session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
+		void refreshApprovedExtensionTools(session, workflow, options.services).catch(() => {
+			session.setActiveToolsByName([...workflow.getAllowedTools()]);
+		});
 	});
 
 	return {
 		session,
 		setActiveTools() {
 			// Called between turns after the controller commits a stage transition.
-			session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
+			void refreshApprovedExtensionTools(session, workflow, options.services).catch(() => {
+				session.setActiveToolsByName([...workflow.getAllowedTools()]);
+			});
 		},
 		dispose() {
 			unsubscribeFromStages();

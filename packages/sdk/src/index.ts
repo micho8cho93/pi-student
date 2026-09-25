@@ -8,4 +8,5 @@ export type {
 	IdentityContext, IdentityProvider, ModelDescriptor, ModelProvider, PolicyProvider,
 	RuntimeConfiguration, SkillDescriptor, SkillProvider, McpDescriptor, McpProvider, TelemetrySink,
 	SandboxConfig, SandboxProfile, SandboxProfileProvider, ManagedDataset, ExtensionCapability, ExtensionScope,
+	SandboxCapability, SandboxEnvironmentState, SandboxEnvironmentStatus, SandboxProviderCapabilities,
 } from "@pi-student/contracts";

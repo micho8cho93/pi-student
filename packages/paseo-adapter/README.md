@@ -33,8 +33,8 @@ of 2, 5, or 10 requests per minute, and appear after a short pause at the end
 of a code line. Tab accepts a suggestion and Escape dismisses it. The bridge
 also caps AI requests at 10 per minute and 100 per rolling 24 hours per
 workspace. It sends
-only a bounded excerpt of the open buffer and up to two small source files in
-the same directory to the chosen model. Managed projects resolve current
+only a bounded excerpt of the open buffer to the chosen model. Nearby files
+are never included automatically. Managed projects resolve current
 model policy and provider approvals before showing or calling models; the
 institution gateway handles institution-model usage and budget settlement.
 The editor hook is checked against the supported Paseo bundle at launch so an

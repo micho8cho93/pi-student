@@ -15,7 +15,7 @@ import { formatProjectBrief, normalizeProjectBrief, type ProjectBrief } from "@p
 
 type Relation<T> = T | T[] | null;
 type Profile = { display_name?: string | null; email?: string | null };
-type TeacherClass = { id: string; name: string; join_code: string; join_enabled: boolean; join_code_expires_at?: string | null; class_members?: Array<{ count: number }> };
+type TeacherClass = { id: string; name: string; organization_id?: string | null; join_code: string; join_enabled: boolean; join_code_expires_at?: string | null; class_members?: Array<{ count: number }> };
 type Member = { id: string; user_id: string; role: string; status: string; joined_at: string; profiles: Relation<Profile> };
 type Project = { capability_policy?: unknown; policy_version?: number; id: string; name: string; description?: string | null; brief?: Partial<ProjectBrief> | null; project_requirements?: Array<{ id: string; title: string }>; project_standards?: Array<{ standards: Relation<{ id?: string; code: string; title?: string }> }> };
 type Session = Record<string, unknown> & { id: string; student_id: string; started_at: string; duration_seconds: number; total_tokens: number; files_created: number; files_modified: number; files_deleted: number; goal?: string | null; models?: string[]; blockers?: string[]; planning_assistance?: string; implementation_assistance?: string; debugging_assistance?: string; explanation_assistance?: string; decisions?: string[]; thinking_mode?: string | null; profiles?: Relation<Profile>; projects?: Relation<{ name: string }>; session_reflections?: Array<Record<string, string>>; session_requirements?: Array<{ project_requirements: Relation<{ title: string }> }>; session_standards?: Array<{ standards: Relation<{ code: string }> }> };
@@ -113,7 +113,7 @@ async function renderScreen(client: SupabaseClient, screen: Screen, theme: Termi
 }
 
 async function renderClasses(client: SupabaseClient, theme: TerminalTheme, write: (value: string) => void) {
-	const { data, error } = await client.from("classes").select("id,name,join_code,join_enabled,join_code_expires_at,class_members(count)").order("created_at");
+	const { data, error } = await client.from("classes").select("id,name,organization_id,join_code,join_enabled,join_code_expires_at,class_members(count)").order("created_at");
 	if (error) throw error;
 	const classes = (data ?? []) as unknown as TeacherClass[];
 	write(`\n${theme.bold("MY CLASSES")}  ${theme.dim("A quiet view into how students are learning.")}\n`);
@@ -236,6 +236,13 @@ async function handleInput(client: SupabaseClient, state: { screen: Screen; choi
 	if (state.screen.tab === "students" && ["approve", "reject"].includes(command)) { await updateMembership(client, state.choices, args[0], command === "approve" ? "active" : "rejected"); return; }
 	if (state.screen.tab === "projects" && ["n", "new", "create"].includes(command)) { await createProject(client, state.screen.item, readline, write, theme); return; }
 	if (state.screen.tab === "projects" && command === "controls") {
+		// Managed projects are governed by delegated organization policy; the
+		// legacy project column is rejected by the database for these classes.
+		if (state.screen.item.organization_id) {
+			write(`\n${theme.warning("This class is managed by an organization. Edit delegated project controls in the teacher web dashboard (pi-student teacher web).")}\n`);
+			await pause(readline);
+			return;
+		}
 		const project = projectChoice(state.choices, args[0]);
 		const policy = await editCapabilities(readline, write, project.capability_policy);
 		if (policy) await updateProjectCapabilities(new SupabaseClassroomRepository(client), project.id, policy);

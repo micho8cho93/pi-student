@@ -6,7 +6,16 @@ export const OLLAMA_PROVIDER_ID = "ollama";
 export const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 
 interface OllamaConfig { url: string; modelId?: string }
-interface OllamaTags { models?: Array<{ name?: string; model?: string; details?: { family?: string } }> }
+interface OllamaTags { models: Array<{ name?: string; model?: string; details?: { family?: string } }> }
+
+export type OllamaDiscoveryCode = "OLLAMA_OFFLINE" | "OLLAMA_TIMEOUT" | "OLLAMA_HTTP_ERROR" | "OLLAMA_INCOMPATIBLE" | "OLLAMA_INVALID_RESPONSE" | "OLLAMA_NO_MODELS";
+
+export class OllamaDiscoveryError extends Error {
+	constructor(readonly code: OllamaDiscoveryCode, message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "OllamaDiscoveryError";
+	}
+}
 
 export function ollamaConfigPath(): string {
 	return join(getAgentDir(), "pi-student-ollama.json");
@@ -47,15 +56,34 @@ export async function saveOllamaUrl(url: string, modelId: string, path = ollamaC
 export async function registerOllama(runtime: ModelRuntime, url: string, fetchImpl: typeof fetch = fetch): Promise<readonly string[]> {
 	const baseUrl = normalizeOllamaUrl(url);
 	let response: Response;
-	try { response = await fetchImpl(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) }); }
-	catch { throw new Error(`Cannot reach Ollama at ${baseUrl}. Start it with ollama serve, then try again.`); }
-	if (!response.ok) throw new Error(`Ollama at ${baseUrl} returned HTTP ${response.status}.`);
-	let payload: OllamaTags;
-	try { payload = await response.json() as OllamaTags; }
-	catch { throw new Error("Ollama returned an invalid model list."); }
-	if (!Array.isArray(payload.models)) throw new Error("Ollama returned an invalid model list.");
-	const models = [...new Set(payload.models.map(model => model.name || model.model).filter((name): name is string => typeof name === "string" && Boolean(name.trim())))];
-	if (!models.length) throw new Error("Ollama has no downloaded models. Run ollama pull <model>, then try again.");
+	try {
+		response = await fetchImpl(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
+	} catch (error) {
+		const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+		throw new OllamaDiscoveryError(timedOut ? "OLLAMA_TIMEOUT" : "OLLAMA_OFFLINE",
+			timedOut ? "Ollama did not respond within 5 seconds. Check that ollama serve is running." : "Ollama is offline. Start it with ollama serve, then try again.", { cause: error });
+	}
+	if (!response.ok) {
+		const code = response.status === 404 || response.status === 405 ? "OLLAMA_INCOMPATIBLE" : "OLLAMA_HTTP_ERROR";
+		throw new OllamaDiscoveryError(code, code === "OLLAMA_INCOMPATIBLE"
+			? `The Ollama endpoint at ${baseUrl} does not provide /api/tags.`
+			: `Ollama at ${baseUrl} returned HTTP ${response.status}.`);
+	}
+	let payload: unknown;
+	try { payload = await response.json(); }
+	catch (error) { throw new OllamaDiscoveryError("OLLAMA_INVALID_RESPONSE", "Ollama returned an invalid model list.", { cause: error }); }
+	if (!payload || typeof payload !== "object" || !Array.isArray((payload as { models?: unknown }).models)) {
+		throw new OllamaDiscoveryError("OLLAMA_INVALID_RESPONSE", "Ollama returned an invalid model list.");
+	}
+	const rows = (payload as OllamaTags).models;
+	const models = [...new Set(rows.map(model => {
+		if (!model || typeof model !== "object") throw new OllamaDiscoveryError("OLLAMA_INVALID_RESPONSE", "Ollama returned an invalid model list.");
+		const name = typeof model.name === "string" ? model.name : typeof model.model === "string" ? model.model : "";
+		const trimmed = name.trim();
+		if (!trimmed || /[\u0000-\u001f\u007f]/u.test(trimmed)) throw new OllamaDiscoveryError("OLLAMA_INVALID_RESPONSE", "Ollama returned an invalid model list.");
+		return trimmed;
+	}))];
+	if (!models.length) throw new OllamaDiscoveryError("OLLAMA_NO_MODELS", "Ollama has no downloaded models. Run ollama pull <model>, then try again.");
 	runtime.registerProvider(OLLAMA_PROVIDER_ID, {
 		name: "Ollama (local)", api: "openai-completions", baseUrl: `${baseUrl}/v1`, apiKey: "ollama", authHeader: false,
 		models: models.map(id => ({

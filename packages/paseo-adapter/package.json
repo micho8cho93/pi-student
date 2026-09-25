@@ -10,9 +10,14 @@
     "test": "vitest run --root ../.. packages/paseo-adapter/test"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@pi-student/contracts": "*",
     "@pi-student/education": "*",
+    "@pi-student/policy": "*",
     "@pi-student/publishing": "*",
     "@pi-student/runtime": "*",
+    "@pi-student/sandbox": "*",
+    "@pi-student/sandbox-gondolin": "*",
     "@pi-student/shared": "*",
     "@pi-student/supabase-adapter": "*",
     "@pi-student/telemetry": "*"

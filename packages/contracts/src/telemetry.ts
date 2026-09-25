@@ -51,6 +51,8 @@ export interface LearningRecord {
 
 export interface TeacherContext {
 	policy?: EffectivePolicy;
+	/** Host workspace selected with this assignment. Old unbound selections must be reselected. */
+	workspacePath?: string;
 	classId?: ClassId;
 	organizationId?: OrganizationId;
 	projectId?: ProjectId;
@@ -89,7 +91,30 @@ export interface LearningRecordEvent {
 }
 
 export interface SafetySignalEvent { type: "safety-signal"; classId: string; categories: string[]; }
-export type TelemetryEvent = UsageEvent | LearningTelemetryEvent | LearningRecordEvent | SafetySignalEvent;
+
+/**
+ * A safe execution audit record. It intentionally carries identifiers and
+ * reason codes only; tool arguments, endpoints, secret references, and
+ * provider responses never cross this boundary.
+ */
+export interface ExecutionDecisionEvent {
+	type: "execution-decision";
+	eventId: string;
+	organizationId: string;
+	classId: string;
+	projectId: string;
+	sessionId?: string;
+	action: "skill.list" | "skill.read" | "mcp.list" | "mcp.call";
+	decision: "allowed" | "denied";
+	extensionId?: string;
+	capability?: string;
+	stage?: string;
+	reasonCode: string;
+	environmentProvider?: string;
+	environmentStatus?: string;
+}
+
+export type TelemetryEvent = UsageEvent | LearningTelemetryEvent | LearningRecordEvent | SafetySignalEvent | ExecutionDecisionEvent;
 
 /** Destination-neutral telemetry boundary. Implementations may persist locally or remotely. */
 export interface TelemetrySink {

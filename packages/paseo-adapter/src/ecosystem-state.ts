@@ -5,6 +5,11 @@ import type { GitHubClient, ProjectPublishingMetadata, RepositorySummary } from 
 import { parseGitHubRemote } from "@pi-student/publishing/publishing-service";
 
 export interface EcosystemState {
+	environment?: {
+		status: string;
+		provider: string;
+		message?: string;
+	};
 	github: {
 		connected: boolean;
 		username?: string;

@@ -1,7 +1,7 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FileCredentialStore, getAuthPath } from "./auth-storage.js";
 import { resolveThinkingLevel, type ThinkingModelCapabilities, type ThinkingLevel } from "@pi-student/policy/thinking";
-import { readOllamaUrl, registerOllama } from "./ollama.js";
+import { OllamaDiscoveryError, readOllamaUrl, registerOllama } from "./ollama.js";
 
 export async function createModelRuntime(): Promise<ModelRuntime> {
 	const runtime = await ModelRuntime.create({
@@ -12,9 +12,13 @@ export async function createModelRuntime(): Promise<ModelRuntime> {
 	});
 	const ollamaUrl = await readOllamaUrl();
 	if (ollamaUrl) {
-		// A stopped local server should not prevent a configured cloud provider from starting.
+		// Offline, timed-out, and empty local servers are normal lifecycle states;
+		// malformed or incompatible endpoints are configuration/programming errors
+		// and must remain observable instead of being silently treated as offline.
 		try { await registerOllama(runtime, ollamaUrl); }
-		catch { /* Setup can reconnect after Ollama starts or a model is pulled. */ }
+		catch (error) {
+			if (!(error instanceof OllamaDiscoveryError && ["OLLAMA_OFFLINE", "OLLAMA_TIMEOUT", "OLLAMA_NO_MODELS"].includes(error.code))) throw error;
+		}
 	}
 	return runtime;
 }

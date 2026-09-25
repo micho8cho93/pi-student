@@ -72,15 +72,13 @@ describe("learning_state extension", () => {
 		const controller = new WorkflowController(createLearningSession("/tmp/project"));
 		const tool = registerLearningStateTool(controller);
 
-		const response = await execute(tool, {
+		await expect(execute(tool, {
 			currentStage: "understand",
 			readyForNextStage: true,
 			goalSummary: "Add a score counter",
 			reason: "Understanding is not ready",
-		});
+		})).rejects.toThrow(/LEARNING_STATE_REJECTED.*understandingReady/s);
 
-		expect(response).toHaveProperty("isError", true);
-		expect(response.details).toMatchObject({ code: "LEARNING_STATE_REJECTED", nextAction: expect.stringContaining("understandingReady") });
 		expect(controller.getStage()).toBe("understand");
 		expect(controller.state.goal).toBeUndefined();
 	});
@@ -88,15 +86,56 @@ describe("learning_state extension", () => {
 	it("rejects model-reported plan approval with a recoverable instruction", async () => {
 		const controller = new WorkflowController(createLearningSession("/tmp/project"));
 		const tool = registerLearningStateTool(controller);
-		const response = await execute(tool, {
+		await expect(execute(tool, {
 			currentStage: "understand",
 			readyForNextStage: false,
 			studentApprovedPlan: true,
 			reason: "The model approved the plan",
+		})).rejects.toThrow(/LEARNING_STATE_REJECTED.*understandingReady/s);
+
+		expect(controller.getStage()).toBe("understand");
+	});
+
+	describe("stage input boundary", () => {
+		const call = (tool: RegisteredTool, params: Record<string, unknown>) => tool.execute("call-1", { readyForNextStage: false, reason: "test", ...params } as never, undefined, undefined, {} as never);
+
+		it("uses the harness stage when none is supplied", async () => {
+			const controller = new WorkflowController(createLearningSession("/tmp/project"));
+			const tool = registerLearningStateTool(controller);
+			const response = await call(tool, { goalSummary: "Add a counter" });
+			expect(response.details).toMatchObject({ previousStage: "understand", currentStage: "understand" });
 		});
 
-		expect(response).toHaveProperty("isError", true);
-		expect(response.details).toMatchObject({ code: "LEARNING_STATE_REJECTED", nextAction: expect.stringContaining("understandingReady") });
-		expect(controller.getStage()).toBe("understand");
+		it.each(["understand", "UNDERSTAND", " Understand ", "understanding"])("accepts %s as the current stage", async stage => {
+			const controller = new WorkflowController(createLearningSession("/tmp/project"));
+			const tool = registerLearningStateTool(controller);
+			const response = await call(tool, { currentStage: stage, goalSummary: "Add a counter", understandingReady: true, readyForNextStage: true });
+			expect(response.details).toMatchObject({ previousStage: "understand", currentStage: "plan" });
+			// One canonical representation everywhere after the boundary.
+			expect(controller.getStage()).toBe("plan");
+			expect(controller.state.stage).toBe("plan");
+		});
+
+		it("rejects an unknown stage and leaves runtime state untouched", async () => {
+			const controller = new WorkflowController(createLearningSession("/tmp/project"));
+			const tool = registerLearningStateTool(controller);
+			await expect(call(tool, { currentStage: "deploy" })).rejects.toThrow(/Unknown learning stage "deploy".*LEARNING_STATE_REJECTED/s);
+			await expect(call(tool, { requestedNextStage: "launch" })).rejects.toThrow(/Unknown learning stage/);
+			expect(controller.getStage()).toBe("understand");
+		});
+
+		it("rejects a valid but stale stage instead of silently using the harness stage", async () => {
+			const controller = new WorkflowController(createLearningSession("/tmp/project"));
+			const tool = registerLearningStateTool(controller);
+			await expect(call(tool, { currentStage: "implement" })).rejects.toThrow(/Stale learning update/);
+			expect(controller.getStage()).toBe("understand");
+		});
+
+		it("does not let a requested stage skip controller gates", async () => {
+			const controller = new WorkflowController(createLearningSession("/tmp/project"));
+			const tool = registerLearningStateTool(controller);
+			await expect(call(tool, { requestedNextStage: "IMPLEMENT", readyForNextStage: true, goalSummary: "x", understandingReady: true })).rejects.toThrow(/LEARNING_STATE_REJECTED|Illegal/);
+			expect(controller.getStage()).toBe("understand");
+		});
 	});
 });

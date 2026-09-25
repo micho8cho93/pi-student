@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { SandboxConfig } from "@pi-student/contracts";
+import type { SandboxConfig, SandboxProviderCapabilities } from "@pi-student/contracts";
 import os from "node:os";
 import { constants as fsConstants } from "node:fs";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
@@ -19,7 +19,7 @@ import {
 	type ResolvedSandboxRuntime,
 	type RuntimeResolutionOptions,
 } from "./runtime.js";
-import { isBlockedHostname, isBlockedRequest, normalizeBlockedHosts } from "./network-policy.js";
+import { isBlockedHostname, isBlockedRequest, isUnsafeIpAddress, normalizeBlockedHosts } from "./network-policy.js";
 
 const GUEST_ENV: Record<string, string> = {
 	HOME: "/root",
@@ -37,7 +37,7 @@ export function createGondolinHttpHooks(policy: {
 		allowedHosts: ["*"],
 		blockInternalRanges: true,
 		isRequestAllowed: request => policy.isInternetAllowed() && !isBlockedRequest(request, policy.blockedHosts()),
-		isIpAllowed: info => policy.isInternetAllowed() && !isBlockedHostname(info.hostname, policy.blockedHosts()),
+		isIpAllowed: info => policy.isInternetAllowed() && !isUnsafeIpAddress(info.ip) && !isBlockedHostname(info.hostname, policy.blockedHosts()),
 	});
 }
 
@@ -46,6 +46,11 @@ export const SANDBOX_ENV_ALLOWLIST = new Set(["CI", "LANG", "LC_ALL", "NODE_ENV"
 
 export class GondolinRuntime implements SandboxRuntime {
 	readonly mode = "gondolin" as const;
+	private readonly capabilities: SandboxProviderCapabilities = {
+		provider: "gondolin",
+		mode: "gondolin",
+		capabilities: ["workspace", "internet-policy", "blocked-hosts"],
+	};
 	private internetAllowed = true;
 	private maxInternetAllowed = true;
 	private blockedHosts: string[] = [];
@@ -56,11 +61,16 @@ export class GondolinRuntime implements SandboxRuntime {
 			// adapter yet. Never pretend that packages, quotas or mounts took effect.
 			throw new SandboxRuntimeError("This Gondolin deployment cannot enforce managed profiles; a verified image and dataset provider is required", "gondolin");
 		}
+		// Validate the complete candidate before touching the VM or replacing the
+		// currently valid policy. Invalid updates are therefore atomic.
+		const nextBlockedHosts = normalizeBlockedHosts(configuration.blockedHosts);
+		const nextInternetAllowed = validateInternetAllowed(configuration.internetAllowed);
 		if (this.isRunning()) await this.stop();
-		this.maxInternetAllowed = configuration.internetAllowed ?? true;
-		this.internetAllowed = this.maxInternetAllowed;
-		this.blockedHosts = normalizeBlockedHosts(configuration.blockedHosts);
+		this.maxInternetAllowed = nextInternetAllowed;
+		this.internetAllowed = nextInternetAllowed;
+		this.blockedHosts = nextBlockedHosts;
 	}
+	getCapabilities(): SandboxProviderCapabilities { return this.capabilities; }
 	setInternetAllowed(allowed: boolean): void { this.internetAllowed = allowed && this.maxInternetAllowed; }
 	private vm?: VM;
 	private projectPath?: string;
@@ -298,4 +308,10 @@ function buildSandboxEnv(env: Record<string, string | undefined> | undefined): R
 		if (SANDBOX_ENV_ALLOWLIST.has(key) && typeof value === "string") result[key] = value;
 	}
 	return result;
+}
+
+function validateInternetAllowed(value: boolean | undefined): boolean {
+	if (value === undefined) return true;
+	if (typeof value !== "boolean") throw new Error("Sandbox internet policy must be a boolean.");
+	return value;
 }

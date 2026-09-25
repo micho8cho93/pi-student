@@ -34,6 +34,22 @@ it("allows direct models only from approved providers", async () => {
 	expect(result?.settings.models).toEqual(["openai/gpt-test"]);
 });
 
+it("applies the organization model allow list to direct and hosted models", async () => {
+	const db = client(true);
+	const rpc = db.rpc.bind(db);
+	db.rpc = (async (name: string, args: unknown) => {
+		const result = await rpc(name, args as never);
+		if (name === "governance_context" && result.data) {
+			result.data.layers[0].settings.models = ["openai/gpt-test"];
+		}
+		return result;
+	}) as typeof db.rpc;
+	const result = await new SupabaseGovernancePolicyProvider(db, standalone,
+		{ url: "https://models.example.test", configure: vi.fn() },
+		() => [{ provider: "openai", id: "gpt-test" }]).resolvePolicy(context);
+	expect(result?.settings.models).toEqual(["openai/gpt-test"]);
+});
+
 it("opens a managed project with no approved providers so its Models page can show the empty state", async () => {
 	const db = client(true);
 	const rpc = db.rpc.bind(db);
@@ -46,4 +62,10 @@ it("opens a managed project with no approved providers so its Models page can sh
 it("does not substitute a local policy when managed authorization fails", async () => {
 	await expect(new SupabaseGovernancePolicyProvider(client(true, true), standalone).resolvePolicy(context)).rejects.toThrow("access denied");
 	expect((await new SupabaseGovernancePolicyProvider(client(false), standalone).resolvePolicy(context))?.settings.models).toEqual([]);
+});
+
+it("does not treat an unreadable class relationship as a personal project", async () => {
+	const db = client(true);
+	db.from = (() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { class_id: "c", classes: null }, error: null }) }) }) })) as typeof db.from;
+	await expect(new SupabaseGovernancePolicyProvider(db, standalone).resolvePolicy(context)).rejects.toThrow("class scope");
 });

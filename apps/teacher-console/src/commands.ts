@@ -76,14 +76,16 @@ export async function runTeacherCommand(args: string[]): Promise<boolean> {
 		if (action === "select") {
 			const projectId = rest[0];
 			if (!projectId) throw new Error("Usage: pi-student project select <project-id> [--requirements id,id]");
-			const { data, error } = await client.from("projects").select("id,name,project_requirements(id),project_standards(standards(id))").eq("id", projectId).eq("class_id", context.classId).single();
+			const { data, error } = await client.from("projects").select("id,name,classes(organization_id),project_requirements(id),project_standards(standards(id))").eq("id", projectId).eq("class_id", context.classId).single();
 			if (error) throw error;
 			const requested = rest[1] === "--requirements" ? (rest[2] ?? "").split(",").filter(Boolean) : [];
 			const available = new Set((data.project_requirements ?? []).map(item => item.id));
 			if (requested.some(id => !available.has(id))) throw new Error("One or more requirements do not belong to this project.");
 			const links = (data.project_standards ?? []) as unknown as Array<{ standards: { id: string } | Array<{ id: string }> | null }>;
 			const standardIds = links.map(link => Array.isArray(link.standards) ? link.standards[0]?.id : link.standards?.id).filter((id): id is string => Boolean(id));
-			await writeTeacherContext({ classId: context.classId, projectId: data.id, requirementIds: requested, standardIds });
+			const classes = data.classes as unknown as { organization_id: string | null } | Array<{ organization_id: string | null }> | null;
+			const organizationId = (Array.isArray(classes) ? classes[0] : classes)?.organization_id ?? undefined;
+			await writeTeacherContext({ classId: context.classId, projectId: data.id, organizationId, workspacePath: process.cwd(), requirementIds: requested, standardIds });
 			process.stdout.write(`Selected ${data.name}. ${standardIds.length} project standard(s) will be associated automatically.\n`);
 			return true;
 		}

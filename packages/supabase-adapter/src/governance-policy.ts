@@ -1,5 +1,5 @@
 import type { CapabilityPolicy, EffectivePolicy, ModelProfile, PolicyContext, PolicyProvider } from "@pi-student/contracts";
-import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
+import { DEFAULT_CAPABILITY_POLICY, parseCapabilityPolicy } from "@pi-student/policy/capability-policy";
 import { resolveEffectivePolicy, type PolicyLayer, type PolicyPatch } from "@pi-student/policy/resolution";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -35,12 +35,17 @@ export class SupabaseGovernancePolicyProvider implements PolicyProvider {
 		const projectId = context.projectId;
 		if (!projectId) return this.standalone.resolvePolicy(context);
 		const { data: project, error: lookupError } = await this.client.from("projects")
-			.select("class_id,classes(organization_id)").eq("id", projectId).maybeSingle();
+			.select("class_id,capability_policy,policy_version,classes(organization_id)").eq("id", projectId).maybeSingle();
 		if (lookupError) throw lookupError;
 		if (!project) throw new Error("Project access is unavailable.");
 		const classes = project.classes as unknown as { organization_id: string | null } | { organization_id: string | null }[] | null;
-		const organizationId = (Array.isArray(classes) ? classes[0] : classes)?.organization_id;
-		if (!organizationId) return this.standalone.resolvePolicy(context);
+		const projectClass = Array.isArray(classes) ? classes[0] : classes;
+		if (!projectClass || (projectClass.organization_id !== null && typeof projectClass.organization_id !== "string")) {
+			throw new Error("Project class scope is unavailable.");
+		}
+		const organizationId = projectClass.organization_id;
+		if (!organizationId) return { projectId, version: project.policy_version ?? 1,
+			settings: parseCapabilityPolicy(project.capability_policy) };
 		const [governance, profiles, providers] = await Promise.all([
 			this.client.rpc("governance_context", { project_id_input: projectId }),
 			this.client.rpc("approved_model_profiles", { project_id_input: projectId }),
@@ -51,7 +56,12 @@ export class SupabaseGovernancePolicyProvider implements PolicyProvider {
 		if (providers.error) throw providers.error;
 		const approvedProviders = new Set((providers.data as string[]) ?? []);
 		const data = governance.data as ContextRow;
+		if (!data || data.organizationId !== organizationId || data.classId !== project.class_id || !Array.isArray(data.layers) ||
+			!data.project || !Array.isArray(profiles.data) || !Array.isArray(providers.data)) {
+			throw new Error("Institutional policy scope is invalid.");
+		}
 		const rawProfiles = profiles.data as Array<{ id: string; organization_id: string; display_name: string; provider: string; provider_model: string; allowed_thinking_levels: ModelProfile["allowedThinkingLevels"]; available: boolean; fallback_profile_id: string | null; version: number }>;
+		if (rawProfiles.some(profile => profile.organization_id !== organizationId)) throw new Error("Model profile belongs to another organization.");
 		const { data: auth } = await this.client.auth.getSession();
 		if (!auth.session?.access_token) throw new Error("Sign in before using institution models.");
 		const modelProfiles: ModelProfile[] = rawProfiles.filter(profile => approvedProviders.has(profile.provider)).map(profile => ({ id: profile.id, organizationId: profile.organization_id,
@@ -66,7 +76,7 @@ export class SupabaseGovernancePolicyProvider implements PolicyProvider {
 		const organization = data.layers.find(layer => layer.scope === "organization");
 		const delegatedPaths = organization?.delegatedPaths ?? [];
 		const selectedModels = organization?.settings.models?.length
-			? models.filter(model => !model.startsWith("institution/") || organization.settings.models!.includes(model))
+			? models.filter(model => organization.settings.models!.includes(model))
 			: models;
 		// An empty allow list is a valid initial state. Leave model policy paths out
 		// so the general resolver can still apply all other class restrictions.

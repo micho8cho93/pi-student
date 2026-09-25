@@ -3,7 +3,9 @@ import { stdin as input, stdout as output } from "node:process";
 import { initTheme, type ModelRuntime, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
 import type { LearningAgentSession } from "@pi-student/runtime/create-session";
-import { askSecret, pickModel, runOAuthSetup, runProviderSetup } from "@pi-student/runtime/setup";
+import type { ExecutionContext } from "@pi-student/contracts";
+import { availableExecutionModels } from "@pi-student/runtime/model-selection";
+import { askSecret, runOAuthSetup, runProviderSetup } from "@pi-student/runtime/setup";
 import {
 	createTheme,
 	formatProviderError,
@@ -15,6 +17,7 @@ import {
 } from "@pi-student/runtime/ui";
 import { BUNDLED_THEME_NAMES, DEFAULT_THEME, resolveThemeAlias } from "@pi-student/runtime/themes";
 import { createTerminalWorkingProgress, LEARNING_CUES, toolLearningCue } from "@pi-student/runtime/progress";
+import { displayLearningStage } from "@pi-student/education/stage";
 import { isDisabledStudentSlashCommand } from "./slash-commands.js";
 
 export interface ReplOptions {
@@ -22,6 +25,7 @@ export interface ReplOptions {
 	agent: LearningAgentSession;
 	modelRuntime?: ModelRuntime;
 	allowedProviders?: readonly string[];
+	executionContext?: () => Promise<ExecutionContext>;
 	inputReader?: Interface;
 	input?: NodeJS.ReadableStream;
 	output?: NodeJS.WritableStream;
@@ -32,6 +36,7 @@ export async function runRepl({
 	agent,
 	modelRuntime = agent.session.modelRuntime,
 	allowedProviders,
+	executionContext,
 	input: inputStream = input,
 	output: outputStream = output,
 	inputReader,
@@ -51,17 +56,21 @@ export async function runRepl({
 		});
 	}
 
+	const initialEnvironment = executionContext ? (await executionContext()).environment : undefined;
 	const model = agent.session.model;
 	write(`\n${renderPanel(theme, "Pi Student · guided coding workspace", [
 		{ label: "project", value: workflow.state.cwd },
-		{ label: "learning", value: `${workflow.state.intent ?? "ROUTING"} · ${workflow.getStage().toUpperCase()}`, tone: "accent" },
+		{ label: "learning", value: `${workflow.state.intent ?? "ROUTING"} · ${displayLearningStage(workflow.getStage())}`, tone: "accent" },
 		{ label: "plan", value: planProgressText(workflow) },
 		{ label: "model", value: model ? `${model.provider}/${model.id}` : "none" },
+		...(initialEnvironment ? [{ label: "environment", value: formatEnvironmentSummary(initialEnvironment), tone: environmentTone(initialEnvironment.status) }] : []),
 	])}\n`);
 
 	let assistantOpen = false;
 	let workNotesOpen = false;
 	let pendingProviderError: string | undefined;
+	// The banner above is a snapshot; announce every controller-approved change so it never goes stale.
+	const stopStageAnnouncements = workflow.onStageChange(stage => write(`\n${theme.dim(`learning · ${displayLearningStage(stage)}`)}\n`));
 	const unsubscribe = agent.session.subscribe((event) => {
 		if (event.type === "agent_start") workingProgress.start();
 		if (event.type === "turn_start") workingProgress.phase(LEARNING_CUES[2]);
@@ -148,7 +157,21 @@ export async function runRepl({
 				continue;
 			}
 			if (command === "/model") {
-				await handleModelCommand(args[0], agent, modelRuntime, theme, write, allowedProviders);
+				await handleModelCommand(args[0], agent, modelRuntime, theme, write, allowedProviders, executionContext);
+				continue;
+			}
+			if (command === "/environment") {
+				const environment = executionContext ? (await executionContext()).environment : undefined;
+				if (!environment) {
+					write(`${theme.dim("No managed environment is selected for this workspace.")}\n`);
+					continue;
+				}
+				write(`${renderPanel(theme, "Coding environment", [
+					{ label: "status", value: formatEnvironmentSummary(environment), tone: environmentTone(environment.status) },
+					{ label: "provider", value: environment.provider },
+					{ label: "capabilities", value: formatEnvironmentCapabilities(environment) },
+					...(environment.message ? [{ label: "next step", value: environment.message, tone: "muted" as const }] : []),
+				])}\n`);
 				continue;
 			}
 			if (command === "/theme") {
@@ -216,6 +239,7 @@ export async function runRepl({
 		}
 	} finally {
 		unsubscribe();
+		stopStageAnnouncements();
 		if (ownsReadline) readline.close();
 	}
 }
@@ -228,11 +252,42 @@ function formatHelp(theme: TerminalTheme): string {
 		{ label: "Ctrl+Shift+D", value: "start or stop Voz dictation", tone: "accent" },
 		{ label: "/theme", value: "list themes; use /theme <name> to switch", tone: "accent" },
 		{ label: "/model", value: "show or switch the active provider/model", tone: "accent" },
+		{ label: "/environment", value: "show sandbox readiness and provider capabilities", tone: "accent" },
 		{ label: "/settings", value: "change provider or replace the API key", tone: "accent" },
 		{ label: "/login", value: "start an SDK-provided OAuth/connector sign-in", tone: "accent" },
 		{ label: "/new", value: "explain how to start a fresh tutor session", tone: "accent" },
 		{ label: "/quit", value: "leave Pi Student", tone: "accent" },
 	])}\n${theme.dim("Anything else is sent to Pi as your learning prompt.")}\n`;
+}
+
+function formatEnvironmentSummary(environment: NonNullable<ExecutionContext["environment"]>): string {
+	const labels: Record<NonNullable<ExecutionContext["environment"]>["status"], string> = {
+		configured: "configured",
+		unsupported: "unsupported",
+		pending: "pending build",
+		building: "building",
+		ready: "ready",
+		active: "active",
+		failed: "failed",
+	};
+	return labels[environment.status];
+}
+
+function environmentTone(status: NonNullable<ExecutionContext["environment"]>["status"]): "success" | "warning" | "error" | "muted" {
+	if (status === "active" || status === "ready") return "success";
+	if (status === "pending" || status === "building" || status === "configured") return "warning";
+	if (status === "failed" || status === "unsupported") return "error";
+	return "muted";
+}
+
+function formatEnvironmentCapabilities(environment: NonNullable<ExecutionContext["environment"]>): string {
+	const labels = new Set<string>();
+	for (const capability of environment.requiredCapabilities) {
+		if (capability === "workspace") labels.add("workspace");
+		else if (capability === "internet-policy" || capability === "blocked-hosts") labels.add("network policy");
+		else labels.add("managed environment");
+	}
+	return [...labels].join(", ") || "workspace";
 }
 
 function normalizeThemeName(value: string | undefined): string | undefined {
@@ -245,7 +300,7 @@ function planProgressText(workflow: WorkflowController): string {
 	return `${complete}/${workflow.state.plan.steps.length} student-authored steps`;
 }
 
-async function handleModelCommand(modelRef: string | undefined, agent: LearningAgentSession, runtime: ModelRuntime, theme: TerminalTheme, write: (text: string) => void, allowedProviders?: readonly string[]): Promise<void> {
+async function handleModelCommand(modelRef: string | undefined, agent: LearningAgentSession, runtime: ModelRuntime, theme: TerminalTheme, write: (text: string) => void, allowedProviders?: readonly string[], executionContext?: () => Promise<ExecutionContext>): Promise<void> {
 	if (modelRef) {
 		const separator = modelRef.indexOf("/");
 		if (separator < 1) {
@@ -268,12 +323,9 @@ async function handleModelCommand(modelRef: string | undefined, agent: LearningA
 		return;
 	}
 
-	const providers = runtime.getProviders().filter((provider) => (!allowedProviders || allowedProviders.includes(provider.id)) && runtime.getProviderAuthStatus(provider.id).configured);
+	const models = executionContext ? await availableExecutionModels(runtime, await executionContext()) : await runtime.getAvailable();
 	write(`\n${theme.bold("Configured models")}\n`);
-	for (const provider of providers) {
-		const model = await pickModel(runtime, provider.id);
-		if (model) write(`  ${provider.id}/${model.id}\n`);
-	}
+	for (const model of models.filter(model => !allowedProviders || model.provider === "institution" || allowedProviders.includes(model.provider))) write(`  ${model.provider}/${model.id}${agent.session.model?.provider === model.provider && agent.session.model?.id === model.id ? " · active" : ""}\n`);
 	write(`${theme.dim("Switch with /model provider/model-id, or use /settings to connect another provider.")}\n`);
 }
 

@@ -102,10 +102,10 @@ All Supabase assets live under `infra/supabase/`. The root commands start/reset 
 
 - `CI Client` reacts to client code and its dependency closure, builds/tests the filtered client graph, and inspects a Linux client archive.
 - `CI Teacher Console` reacts to the teacher application and its dependency closure and validates its own archive.
-- `CI Organization Admin` and `CI Platform Admin` react to their respective application paths and shared dependency closures; each builds and tests only its own workspace graph.
+- Organization and platform administration have no separate workflow: they have no packaging boundary, so `CI Core`'s affected build/typecheck/test and architecture check already cover them.
 - `CI Sandbox` is the only ordinary workflow that boots the sandbox smoke test; teacher presentation changes do not trigger it.
 - `CI Database` reacts to `infra/supabase/` and runs migrations, schema lint, and pgTAP tests locally.
-- `Release Client` retains the `darwin-arm64`, `darwin-x64`, `linux-x64`, and `linux-arm64` matrix plus published SHA-256 checksums.
+- `Release Client` first runs the full build/typecheck/test gate, then retains the `darwin-arm64`, `darwin-x64`, `linux-x64`, and `linux-arm64` matrix plus published SHA-256 checksums.
 
 This gives the intended propagation: contracts/SDK changes fan out through Turbo; education, publishing, policy, runtime, and sandbox changes reach the client through declared dependencies; teacher-only presentation changes stay in the teacher unit; and migration-only changes stay in database CI.
 

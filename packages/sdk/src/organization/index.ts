@@ -3,6 +3,6 @@ export { resolveApprovedModel, calculateEstimatedCostMicros, evaluateBudget } fr
 export type { UsageRecord, MeteredResource, TokenPrice, BudgetRule, BudgetAction } from "@pi-student/organization";
 export type {
 	Organization, OrganizationAccess, OrganizationAdministration, OrganizationAuthorization,
-	OrganizationCapability, OrganizationMembership, OrganizationMembershipStatus, OrganizationRole, PlatformRole,
+	OrganizationCapability, OrganizationMembership, OrganizationMembershipStatus, OrganizationNonOwnerRole, OrganizationRole, PlatformRole,
 	OrganizationEntitlementKey, OrganizationEntitlements,
 } from "@pi-student/organization";
