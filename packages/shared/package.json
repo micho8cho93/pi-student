@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./dist/index.js", "./*": "./dist/*.js" },
+  "exports": {
+    ".": "./dist/index.js",
+    "./*": "./dist/*.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --root ../.. --passWithNoTests packages/shared/test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0"
   }
 }

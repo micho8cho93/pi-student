@@ -25,5 +25,19 @@ The student launch choices are Chat, Terminal, and Flowchart in both existing
 workspaces and the new-workspace screen. Flowchart opens a read-only, zoomable
 diagram generated from the selected project's current source files. Refresh
 scans the source again and regenerates the diagram.
+
+The file editor offers local keyword and in-file word completions while typing,
+or on Ctrl/Command-Space. Its **Complete · AI off** button opens the completion
+settings. AI suggestions are opt-in, have a visible model selector and a choice
+of 2, 5, or 10 requests per minute, and appear after a short pause at the end
+of a code line. Tab accepts a suggestion and Escape dismisses it. The bridge
+also caps AI requests at 10 per minute and 100 per rolling 24 hours per
+workspace. It sends
+only a bounded excerpt of the open buffer and up to two small source files in
+the same directory to the chosen model. Managed projects resolve current
+model policy and provider approvals before showing or calling models; the
+institution gateway handles institution-model usage and budget settlement.
+The editor hook is checked against the supported Paseo bundle at launch so an
+upstream editor change fails visibly instead of silently disabling completion.
 This is an app-shell restriction; it does not change Paseo's underlying generic
 workspace capabilities.

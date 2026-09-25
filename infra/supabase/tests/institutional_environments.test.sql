@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(25);
+select plan(26);
 
 insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) values
  ('81000000-0000-0000-0000-000000000001','authenticated','authenticated','env-owner@example.test','{}','{}'),
@@ -44,6 +44,7 @@ select throws_ok($$ select public.save_organization_skill('82000000-0000-0000-00
 select ok(set_config('env.mcp',public.save_organization_mcp('82000000-0000-0000-0000-000000000001',null,'Course API','1.0.0','http','https://course.example.test/api',null,'vault://course/token',array['course.example.test'],'organization',null,null,array['network'],'approved',true)::text,true)<>'','admin creates approved MCP with opaque secret reference');
 select results_eq($$ select count(*) from public.administrative_audit_events where organization_id='82000000-0000-0000-0000-000000000001' and action in ('sandbox_profile.created','skill.imported','mcp.created') $$,$$ values (3::bigint) $$,'registry changes audited without credential values');
 select set_config('request.jwt.claim.sub','81000000-0000-0000-0000-000000000002',true);
+select lives_ok($$ select public.set_teacher_extension_enabled('83000000-0000-0000-0000-000000000001',null,'mcp',current_setting('env.mcp')::uuid,true) $$,'teacher grants an approved MCP to the class');
 select throws_ok($$ select public.save_sandbox_profile('82000000-0000-0000-0000-000000000001',null,'Teacher', '{}'::jsonb) $$,'42501','Organization administrator required','teacher cannot mint profile');
 select throws_ok($$ select public.save_organization_mcp('82000000-0000-0000-0000-000000000001',null,'Teacher MCP','1','http','https://course.example.test',null,null,'{}','organization',null,null,'{}','approved',true) $$,'42501','Organization administrator required','teacher cannot bypass extension review');
 set local role service_role;

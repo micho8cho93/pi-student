@@ -26,14 +26,19 @@ describe("institutional environment resolution", () => {
 	});
 	it("filters disabled/capability-restricted extensions before runtime configuration", async () => {
 		const policy: EffectivePolicy = { projectId: "project-1", version: 1, settings: { ...DEFAULT_CAPABILITY_POLICY, internet: false } };
-		const payload = { organizationId: org, projectId: "project-1", blockedSites: [], profile: base,
+		const payload = { organizationId: org, projectId: "project-1", blockedSites: ["youtube.com"], profile: base,
 			skills: [{ id: "read", name: "Read", organizationId: org, capabilities: [] }, { id: "net", name: "Net", organizationId: org, capabilities: ["network"] }],
 			mcps: [{ id: "mcp", name: "MCP", transport: "http", organizationId: org, capabilities: ["secrets"] }] };
 		const result = await new SupabaseInstitutionalEnvironmentProvider(client(payload)).resolve("project-1", policy);
 		expect(result?.sandbox.profile).toEqual(base);
 		expect(result?.sandbox.internetAllowed).toBe(false);
+		expect(result?.sandbox.blockedHosts).toEqual(["youtube.com"]);
 		expect(result?.skills?.map(skill => skill.id)).toEqual(["read"]);
 		expect(result?.mcps).toEqual([]);
+	});
+	it("rejects malformed blocked sites from the control plane", async () => {
+		const payload = { organizationId: org, projectId: "project-1", blockedSites: ["https://example.com/path"], profile: null, skills: [], mcps: [] };
+		await expect(new SupabaseInstitutionalEnvironmentProvider(client(payload)).resolve("project-1")).rejects.toThrow("blocked sites");
 	});
 	it("rejects tenant mismatch and invalid guest mount paths", () => {
 		expect(() => validateProfile({ ...base, organizationId: "other" }, org)).toThrow();

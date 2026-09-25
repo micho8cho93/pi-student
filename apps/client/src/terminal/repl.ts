@@ -21,6 +21,7 @@ export interface ReplOptions {
 	workflow: WorkflowController;
 	agent: LearningAgentSession;
 	modelRuntime?: ModelRuntime;
+	allowedProviders?: readonly string[];
 	inputReader?: Interface;
 	input?: NodeJS.ReadableStream;
 	output?: NodeJS.WritableStream;
@@ -30,6 +31,7 @@ export async function runRepl({
 	workflow,
 	agent,
 	modelRuntime = agent.session.modelRuntime,
+	allowedProviders,
 	input: inputStream = input,
 	output: outputStream = output,
 	inputReader,
@@ -146,7 +148,7 @@ export async function runRepl({
 				continue;
 			}
 			if (command === "/model") {
-				await handleModelCommand(args[0], agent, modelRuntime, theme, write);
+				await handleModelCommand(args[0], agent, modelRuntime, theme, write, allowedProviders);
 				continue;
 			}
 			if (command === "/theme") {
@@ -171,7 +173,7 @@ export async function runRepl({
 			}
 			if (command === "/settings" || command === "/setup") {
 				try {
-					const selection = await runProviderSetup(modelRuntime, { input: inputStream, output: outputStream, readline, theme });
+					const selection = await runProviderSetup(modelRuntime, { input: inputStream, output: outputStream, readline, theme, allowedProviders });
 					const selectedModel = modelRuntime.getModel(selection.providerId, selection.modelId);
 					if (selectedModel) await agent.session.setModel(selectedModel, { persist: true });
 					write(`${theme.success("✓ Settings updated")}\n`);
@@ -182,7 +184,7 @@ export async function runRepl({
 			}
 			if (command === "/login") {
 				try {
-					const selection = await runOAuthSetup(modelRuntime, { input: inputStream, output: outputStream, readline, theme });
+					const selection = await runOAuthSetup(modelRuntime, { input: inputStream, output: outputStream, readline, theme, allowedProviders });
 					const selectedModel = modelRuntime.getModel(selection.providerId, selection.modelId);
 					if (selectedModel) await agent.session.setModel(selectedModel, { persist: true });
 					write(`${theme.success("✓ OAuth settings updated")}\n`);
@@ -243,7 +245,7 @@ function planProgressText(workflow: WorkflowController): string {
 	return `${complete}/${workflow.state.plan.steps.length} student-authored steps`;
 }
 
-async function handleModelCommand(modelRef: string | undefined, agent: LearningAgentSession, runtime: ModelRuntime, theme: TerminalTheme, write: (text: string) => void): Promise<void> {
+async function handleModelCommand(modelRef: string | undefined, agent: LearningAgentSession, runtime: ModelRuntime, theme: TerminalTheme, write: (text: string) => void, allowedProviders?: readonly string[]): Promise<void> {
 	if (modelRef) {
 		const separator = modelRef.indexOf("/");
 		if (separator < 1) {
@@ -266,7 +268,7 @@ async function handleModelCommand(modelRef: string | undefined, agent: LearningA
 		return;
 	}
 
-	const providers = runtime.getProviders().filter((provider) => runtime.getProviderAuthStatus(provider.id).configured);
+	const providers = runtime.getProviders().filter((provider) => (!allowedProviders || allowedProviders.includes(provider.id)) && runtime.getProviderAuthStatus(provider.id).configured);
 	write(`\n${theme.bold("Configured models")}\n`);
 	for (const provider of providers) {
 		const model = await pickModel(runtime, provider.id);

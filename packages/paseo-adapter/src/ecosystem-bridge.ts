@@ -15,6 +15,19 @@ import { persistApiKey } from "@pi-student/runtime/auth-storage";
 import { DEFAULT_OLLAMA_URL, OLLAMA_PROVIDER_ID, readOllamaConfig, registerOllama, saveOllamaUrl } from "@pi-student/runtime/ollama";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { generateFlowchart } from "./flowchart.js";
+import { CompletionError, EditorCompletionService, type CompletionRequest } from "./editor-completion.js";
+import { providerCatalog } from "@pi-student/shared/provider-catalog";
+import { approvedProvidersForCurrentProject, currentPiUserId, supabaseMcpAvailableForCurrentProject } from "@pi-student/supabase-adapter/provider-approvals";
+import { createPiSupabaseClient } from "@pi-student/supabase-adapter/auth";
+import { readSupabaseConfig } from "@pi-student/supabase-adapter/config";
+import { SupabaseGovernancePolicyProvider } from "@pi-student/supabase-adapter/governance-policy";
+import { SupabaseIdentityProvider } from "@pi-student/supabase-adapter/identity-provider";
+import { SupabaseModelAdmissionProvider } from "@pi-student/supabase-adapter/model-admission";
+import { readTeacherContext } from "@pi-student/telemetry/local-store";
+import { DirectModelProvider } from "@pi-student/runtime/model-provider";
+import { StoredPolicyProvider } from "@pi-student/policy/provider";
+import { beginSupabaseMcpLogin, finishSupabaseMcpLogin, supabaseMcpConnected } from "@pi-student/shared/supabase-mcp-oauth";
+import { randomUUID } from "node:crypto";
 
 export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
@@ -41,10 +54,40 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 	let providerRuntime: ModelRuntime | undefined;
 	let providerRuntimeReady = false;
 	let codexLogin: { status: string; message?: string; url?: string; code?: string; prompt?: { type: string; message: string; options?: ReadonlyArray<{ id: string; label: string; description?: string }> }; answer?: (value: string) => void; error?: string } | undefined;
+	let supabaseLogin: { state: string; userId: string; startedAt: number } | undefined;
 	const getProviderRuntime = async () => {
 		providerRuntime ??= await createModelRuntime();
 		if (!providerRuntimeReady) { await providerRuntime.refresh({ allowNetwork: false }); providerRuntimeReady = true; }
 		return providerRuntime;
+	};
+	const completionSessionId = randomUUID();
+	const completions = new EditorCompletionService(async () => {
+		const runtime = await getProviderRuntime();
+		const context = await readTeacherContext();
+		const config = readSupabaseConfig();
+		if (!context.organizationId) return { runtime, policy: context.policy };
+		if (!context.projectId || !config) throw new CompletionError("The selected class project is unavailable. Reconnect before using AI completion.", 403);
+		const client = createPiSupabaseClient(config);
+		const direct = await DirectModelProvider.create(runtime);
+		const gatewayUrl = process.env.PI_STUDENT_MODEL_GATEWAY_URL?.trim();
+		const governance = new SupabaseGovernancePolicyProvider(client, new StoredPolicyProvider(readTeacherContext), gatewayUrl ? {
+			url: gatewayUrl, configure: (projectId, url, profiles, token) => direct.configureHostedProfiles(projectId, url, profiles, token),
+		} : undefined, () => runtime.getModels().filter(model => model.provider !== "institution").map(model => ({ provider: model.provider, id: model.id })));
+		const identity = await new SupabaseIdentityProvider(client, "student").getIdentity();
+		if (identity.kind !== "student") throw new Error("Sign in to use completion models for this class project.");
+		const policy = await governance.resolvePolicy({ identity, projectId: context.projectId });
+		if (!policy) throw new Error("Project model policy is unavailable.");
+		const approvedProviders = await approvedProvidersForCurrentProject();
+		if (!approvedProviders) throw new Error("Project provider approval is unavailable.");
+		const admission = new SupabaseModelAdmissionProvider(client, (token, sessionId, thinking) => direct.refreshHostedToken(token, sessionId, thinking));
+		return { runtime, policy, managed: true, approvedProviders, beforeRequest: async (provider: string, modelId: string, thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => {
+			const decision = await admission.check(context.projectId!, provider, modelId, thinking, completionSessionId);
+			if (decision.blocked) throw new CompletionError("This model is blocked by the project approval or budget.", 403);
+		} };
+	});
+	const requireApprovedProvider = async (providerId: string) => {
+		const approved = await approvedProvidersForCurrentProject();
+		if (approved && !approved.includes(providerId)) throw new Error("This model provider is not approved for the selected class project.");
 	};
 	return createServer(async (request, response) => {
 		setSecurityHeaders(response);
@@ -52,7 +95,29 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 		if (request.method === "OPTIONS") { response.writeHead(204); response.end(); return; }
 		try {
 			const url = new URL(request.url ?? "/", "http://127.0.0.1");
+			if (request.method === "GET" && url.pathname === "/providers/supabase/callback") {
+				const pending = supabaseLogin;
+				if (!pending || Date.now() - pending.startedAt > 300000 || url.searchParams.get("state") !== pending.state || !url.searchParams.get("code")) {
+					response.writeHead(400, { "content-type": "text/plain; charset=utf-8" }).end("Supabase sign-in expired. Start again in Pi Student."); return;
+				}
+				supabaseLogin = undefined;
+				await finishSupabaseMcpLogin(pending.userId, url.searchParams.get("code")!);
+				response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'" }).end("<h1>Supabase connected</h1><p>You can return to Pi Student.</p>"); return;
+			}
 			if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true, provider: "pi-student-ecosystem", multiProject: true, learnMode: true, flowchart: true });
+			if (url.pathname === "/editor-completion/models" && request.method === "GET") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
+				return json(response, 200, { models: await completions.models(root) });
+			}
+			if (url.pathname === "/editor-completion" && request.method === "POST") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
+				const body = await readBody(request, 80_000) as CompletionRequest;
+				const controller = new AbortController();
+				response.once("close", () => controller.abort());
+				return json(response, 200, await completions.suggest(root, body, controller.signal));
+			}
 			if (["GET", "POST"].includes(request.method ?? "") && url.pathname === "/learn-mode") {
 				const workspaceId = url.searchParams.get("workspaceId");
 				const activeProject = await resolvePaseoWorkspacePath(paseoHome, workspaceId ?? undefined, projectPath);
@@ -88,15 +153,27 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			}
 			if (request.method === "GET" && url.pathname === "/providers") {
 				const runtime = await getProviderRuntime();
+				const approved = await approvedProvidersForCurrentProject();
 				const ollama = await readOllamaConfig();
-				const rows = await Promise.all([
-					providerRow(runtime, "openai", "OpenAI", "API key"),
-					providerRow(runtime, "openai-codex", "OpenAI Codex", "ChatGPT sign-in"),
-					providerRow(runtime, OLLAMA_PROVIDER_ID, "Ollama", "Local server"),
-				]);
+				const rows = await Promise.all(providerCatalog
+					.filter(provider => (!approved || approved.includes(provider.id)) && (provider.id === OLLAMA_PROVIDER_ID || runtime.getProvider(provider.id)))
+					.map(provider => providerRow(runtime, provider.id, provider.name, provider.connection)));
 				return json(response, 200, { providers: rows, ollamaUrl: ollama?.url ?? DEFAULT_OLLAMA_URL, codexLogin: codexLogin ? { ...codexLogin, answer: undefined } : undefined });
 			}
+			if (request.method === "GET" && url.pathname === "/providers/supabase") {
+				const available = await supabaseMcpAvailableForCurrentProject();
+				return json(response, 200, { available, connected: available ? await supabaseMcpConnected(await currentPiUserId()) : false });
+			}
+			if (request.method === "POST" && url.pathname === "/providers/supabase/login") {
+				if (!await supabaseMcpAvailableForCurrentProject()) return json(response, 403, { error: "Your school and teacher have not enabled Supabase MCP for this project." });
+				const userId = await currentPiUserId();
+				const state = randomUUID();
+				supabaseLogin = { state, userId, startedAt: Date.now() };
+				const authorizationUrl = await beginSupabaseMcpLogin(userId, state);
+				return json(response, 200, { connected: !authorizationUrl, authorizationUrl });
+			}
 			if (request.method === "POST" && url.pathname === "/providers/openai") {
+				await requireApprovedProvider("openai");
 				const body = await readBody(request) as { apiKey?: unknown };
 				if (typeof body.apiKey !== "string" || !body.apiKey.trim()) return json(response, 400, { error: "Enter an OpenAI API key." });
 				await persistApiKey("openai", body.apiKey.trim());
@@ -104,7 +181,19 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				await runtime.refresh({ allowNetwork: false, providers: ["openai"] });
 				return json(response, 200, await providerRow(runtime, "openai", "OpenAI", "API key"));
 			}
+			if (request.method === "POST" && url.pathname === "/providers/key") {
+				const body = await readBody(request) as { providerId?: unknown; apiKey?: unknown };
+				const item = providerCatalog.find(provider => provider.id === body.providerId && provider.connection === "API key");
+				if (!item || typeof body.apiKey !== "string" || !body.apiKey.trim()) return json(response, 400, { error: "Choose a supported provider and enter its API key." });
+				await requireApprovedProvider(item.id);
+				const runtime = await getProviderRuntime();
+				if (!runtime.getProvider(item.id)) return json(response, 400, { error: "This provider is unavailable in the installed model runtime." });
+				await persistApiKey(item.id, body.apiKey.trim());
+				await runtime.refresh({ allowNetwork: false, providers: [item.id] });
+				return json(response, 200, await providerRow(runtime, item.id, item.name, item.connection));
+			}
 			if (request.method === "POST" && url.pathname === "/providers/ollama") {
+				await requireApprovedProvider(OLLAMA_PROVIDER_ID);
 				const body = await readBody(request) as { url?: unknown; modelId?: unknown };
 				if (typeof body.url !== "string") return json(response, 400, { error: "Enter the Ollama server address." });
 				const runtime = await getProviderRuntime();
@@ -114,6 +203,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				return json(response, 200, { ...(await providerRow(runtime, OLLAMA_PROVIDER_ID, "Ollama", "Local server")), models });
 			}
 			if (request.method === "POST" && url.pathname === "/providers/codex/login") {
+				await requireApprovedProvider("openai-codex");
 				if (codexLogin?.status === "connecting") return json(response, 409, { error: "Codex sign-in is already in progress." });
 				const runtime = await getProviderRuntime();
 				if (!runtime.getProvider("openai-codex")?.auth.oauth) return json(response, 400, { error: "Codex sign-in is unavailable in this Pi runtime." });
@@ -137,6 +227,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				return json(response, 202, { status: codexLogin.status, message: codexLogin.message });
 			}
 			if (request.method === "POST" && url.pathname === "/providers/codex/answer") {
+				await requireApprovedProvider("openai-codex");
 				const body = await readBody(request) as { answer?: unknown };
 				if (typeof body.answer !== "string" || !codexLogin?.answer) return json(response, 400, { error: "There is no Codex sign-in prompt to answer." });
 				const answer = body.answer.trim();
@@ -188,7 +279,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			}
 			return json(response, 404, { error: "Not found" });
 		} catch (error) {
-			return json(response, 500, { error: safeError(error) });
+			return json(response, error instanceof CompletionError ? error.status : 500, { error: safeError(error) });
 		}
 	});
 }
@@ -235,11 +326,11 @@ function setSecurityHeaders(response: ServerResponse): void {
 	response.setHeader("X-Content-Type-Options", "nosniff");
 }
 
-async function readBody(request: IncomingMessage): Promise<unknown> {
+async function readBody(request: IncomingMessage, limit = 10_000): Promise<unknown> {
 	let value = "";
 	for await (const chunk of request) {
 		value += String(chunk);
-		if (value.length > 10_000) throw new Error("Request body is too large.");
+		if (value.length > limit) throw new Error("Request body is too large.");
 	}
 	return value ? JSON.parse(value) : {};
 }

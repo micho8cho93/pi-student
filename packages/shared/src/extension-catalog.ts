@@ -1,0 +1,5 @@
+export const skillCatalog = [{id:'impeccable',name:'Impeccable',description:'Design guidance, UI review, accessibility, and visual refinement. Includes Markdown playbooks; optional external CLI tools are not installed.',version:'4.3.1',source:'https://impeccable.style/',repository:'https://github.com/pbakaus/impeccable',commit:"e0881d2de397d5e9761d7b35ff5017d8f5ebf69b",artifactDigest:"sha256:7e83542e7b2bda084f25696359239e929ef060ffcda3f3e6ad6b445b5404ce8a",capabilities:[] as string[]}];
+export const mcpCatalog = [
+ {id:'cloudflare-docs',name:'Cloudflare Documentation',description:'Search current Cloudflare product documentation. No account or API key required.',version:'1',endpoint:'https://docs.mcp.cloudflare.com/mcp',capabilities:['network'],hosts:['docs.mcp.cloudflare.com']},
+ {id:'supabase',name:'Supabase MCP',description:'Read Supabase documentation and your own projects after you sign in with Supabase. Available in read-only mode.',version:'1',endpoint:'https://mcp.supabase.com/mcp',capabilities:['network','database'],hosts:['mcp.supabase.com']},
+];

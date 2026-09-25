@@ -52,12 +52,8 @@ describe("student_plan extension", () => {
 		const confirm = vi.fn().mockResolvedValue(true);
 		const tool = registerTool(controller);
 
-		const response = await tool.execute("plan-1", { action: "approve" }, undefined, undefined, { ui: { confirm } } as never);
-
-		expect(response).not.toHaveProperty("isError", true);
-		expect(response.details).toMatchObject({ code: "PLAN_REQUIRES_STUDENT_STEP" });
-		expect(response.details).toMatchObject({ recoverable: true });
-		expect(response.details).toMatchObject({ nextAction: expect.stringContaining("select or type") });
+		await expect(tool.execute("plan-1", { action: "approve" }, undefined, undefined, { ui: { confirm } } as never))
+			.rejects.toMatchObject({ name: "ToolExecutionError", message: expect.stringContaining("PLAN_REQUIRES_STUDENT_STEP") });
 		expect(confirm).not.toHaveBeenCalled();
 		expect(controller.state.plan.approved).toBe(false);
 	});

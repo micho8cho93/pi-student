@@ -4,7 +4,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export class SupabaseModelAdmissionProvider implements ModelAdmissionProvider {
 	constructor(private readonly client: SupabaseClient, private readonly refreshGatewayToken?: (token: string, sessionId?: string, thinkingLevel?: ThinkingLevel) => void) {}
 	async check(projectId: string, provider: string, modelId: string, thinkingLevel: ThinkingLevel, sessionId?: string) {
-		if (provider !== "institution") return { warning: false, blocked: true, action: "block_model" as const };
+		if (provider !== "institution") {
+			const approved = await this.client.rpc("approved_provider_ids", { project_id_input: projectId });
+			if (approved.error) throw approved.error;
+			return { warning: false, blocked: !(approved.data as string[]).includes(provider), action: "block_model" as const };
+		}
 		const profiles = await this.client.rpc("approved_model_profiles", { project_id_input: projectId });
 		if (profiles.error) throw profiles.error;
 		const profile = (profiles.data as Array<{ id: string; provider: string; provider_model: string; allowed_thinking_levels: string[] }>).find(item => item.id === modelId);

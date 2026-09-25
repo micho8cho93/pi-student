@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(24);
+select plan(28);
 
 insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) values
  ('71000000-0000-0000-0000-000000000001','authenticated','authenticated','governance-owner@example.test','{}','{}'),
@@ -34,6 +34,7 @@ select lives_ok($$ select public.set_organization_entitlement('72000000-0000-000
 select lives_ok($$ select public.set_organization_entitlement('72000000-0000-0000-0000-000000000001','usage_dashboard',true) $$,'operator grants usage dashboard');
 select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000001',true);
 select ok(set_config('governance.profile',public.save_model_profile('72000000-0000-0000-0000-000000000001',null,'General Coding','openai','gpt-test',array['low'],true,null)::text,true) <> '', 'owner creates approved model');
+select lives_ok($$ select public.save_organization_providers('72000000-0000-0000-0000-000000000001',array['openai']) $$,'owner allows OpenAI');
 select lives_ok($$ select public.save_model_price('72000000-0000-0000-0000-000000000001',current_setting('governance.profile')::uuid,'2026-09',2000000,4000000,0,0) $$,'owner records immutable price version');
 select lives_ok($$ select public.save_governance_policy('72000000-0000-0000-0000-000000000001','organization',null,null,'{"internet":false}'::jsonb,array['internet','models']) $$,'owner saves organization policy and delegation');
 select results_eq($$ select count(*) from public.administrative_audit_events where organization_id='72000000-0000-0000-0000-000000000001' and target_type='model_profiles' $$,$$ values (1::bigint) $$,'model change audited');
@@ -98,5 +99,13 @@ select pass('cross-tenant model access denied');
 select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000004',true);
 select results_eq($$ select known_cost_micros from public.platform_usage_summary() where organization_id='72000000-0000-0000-0000-000000000001' $$,
  $$ values (200::bigint) $$,'platform sees aggregate cost only');
+select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000001',true);
+select lives_ok($$ select public.save_organization_providers('72000000-0000-0000-0000-000000000001','{}'::text[]) $$,'owner removes OpenAI approval');
+select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000003',true);
+select results_eq($$ select count(*) from public.approved_model_profiles('74000000-0000-0000-0000-000000000001') $$,
+ $$ values (0::bigint) $$,'removed provider disappears from student model profiles');
+set local role service_role;
+select throws_ok($$ select public.gateway_reserve_model_request('71000000-0000-0000-0000-000000000003','74000000-0000-0000-0000-000000000001',
+ current_setting('governance.profile')::uuid,'low',32000,4096) $$,'42501','Model profile or thinking level is not approved','gateway denies a removed provider');
 select * from finish();
 rollback;

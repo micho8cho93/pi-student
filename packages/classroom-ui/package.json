@@ -1,0 +1,22 @@
+{
+  "name": "@pi-student/classroom-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./dashboard-page": "./dist/dashboard-page.js",
+    "./dashboard-styles": "./dist/dashboard-styles.js",
+    "./capability-editor": "./dist/capability-editor.js",
+    "./teacher-settings": "./dist/teacher-settings.js",
+    "./teacher-sections": "./dist/teacher-sections.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pi-student/policy": "*",
+    "@pi-student/shared": "*",
+    "@pi-student/supabase-adapter": "*"
+  }
+}

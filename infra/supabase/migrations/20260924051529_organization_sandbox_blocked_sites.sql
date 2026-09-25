@@ -78,12 +78,18 @@ begin
       'artifactDigest',s.artifact_digest)),'[]'::jsonb) from public.organization_skills s
       where s.organization_id=org_id and s.enabled and s.approval_status='approved'
         and (s.scope='organization' or (s.scope='class' and s.class_id=class_key) or
-          (s.scope='project' and s.project_id=project_id_input))),
+          (s.scope='project' and s.project_id=project_id_input))
+        and not exists (select 1 from public.teacher_extension_blocks b where b.class_id=class_key
+          and b.kind='skill' and b.extension_id=s.id and
+          (b.project_id is null or b.project_id=project_id_input))),
     'mcps',(select coalesce(jsonb_agg(jsonb_build_object('id',m.id,'organizationId',org_id,'name',m.name,
       'transport',m.transport,'version',m.version,'scope',m.scope,'capabilities',m.capabilities)),'[]'::jsonb)
       from public.organization_mcps m where m.organization_id=org_id and m.enabled and m.approval_status='approved'
         and (m.scope='organization' or (m.scope='class' and m.class_id=class_key) or
-          (m.scope='project' and m.project_id=project_id_input)))
+          (m.scope='project' and m.project_id=project_id_input))
+        and not exists (select 1 from public.teacher_extension_blocks b where b.class_id=class_key
+          and b.kind='mcp' and b.extension_id=m.id and
+          (b.project_id is null or b.project_id=project_id_input)))
   ) into result;
   return result;
 end;

@@ -28,6 +28,19 @@ const GUEST_ENV: Record<string, string> = {
 	TMPDIR: "/tmp",
 };
 
+/** Centralize Gondolin's outbound HTTP policy so host and IP checks stay paired. */
+export function createGondolinHttpHooks(policy: {
+	isInternetAllowed: () => boolean;
+	blockedHosts: () => readonly string[];
+}) {
+	return createHttpHooks({
+		allowedHosts: ["*"],
+		blockInternalRanges: true,
+		isRequestAllowed: request => policy.isInternetAllowed() && !isBlockedRequest(request, policy.blockedHosts()),
+		isIpAllowed: info => policy.isInternetAllowed() && !isBlockedHostname(info.hostname, policy.blockedHosts()),
+	});
+}
+
 /** Provider/runtime credentials are intentionally absent from this allowlist. */
 export const SANDBOX_ENV_ALLOWLIST = new Set(["CI", "LANG", "LC_ALL", "NODE_ENV", "TERM", "TZ"]);
 
@@ -112,11 +125,9 @@ export class GondolinRuntime implements SandboxRuntime {
 				} else {
 					sandbox = { vmm: "qemu", qemuPath: runtime.executablePath, imagePath: assets };
 				}
-				const { httpHooks } = createHttpHooks({
-					allowedHosts: ["*"],
-					blockInternalRanges: true,
-					isRequestAllowed: request => this.internetAllowed && !isBlockedRequest(request, this.blockedHosts),
-					isIpAllowed: info => this.internetAllowed && !isBlockedHostname(info.hostname, this.blockedHosts),
+				const { httpHooks } = createGondolinHttpHooks({
+					isInternetAllowed: () => this.internetAllowed,
+					blockedHosts: () => this.blockedHosts,
 				});
 				vm = await VM.create({
 					httpHooks,

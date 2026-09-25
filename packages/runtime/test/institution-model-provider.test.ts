@@ -11,7 +11,8 @@ it("registers approved institution profiles against the gateway with a student t
 	}], "student-jwt");
 	expect(registerProvider).toHaveBeenCalledWith("institution", expect.objectContaining({
 		api: "openai-completions", baseUrl: "https://models.example.test/projects/74000000-0000-0000-0000-000000000001/v1",
-		apiKey: "student-jwt", models: [expect.objectContaining({ id: "75000000-0000-0000-0000-000000000001" })],
+		apiKey: "student-jwt", models: [expect.objectContaining({ id: "75000000-0000-0000-0000-000000000001",
+			thinkingLevelMap: expect.objectContaining({ off: undefined, low: "low", minimal: null, medium: null }) })],
 	}));
 	provider.refreshHostedToken("new-student-jwt", "77000000-0000-0000-0000-000000000001", "low");
 	expect(registerProvider).toHaveBeenLastCalledWith("institution", expect.objectContaining({

@@ -24,22 +24,28 @@ it("uses Google OAuth without sending administrator sign-in emails", () => {
 	expect(page).not.toContain('id="email-form"');
 });
 
-it("offers sandbox site blocking, Skill and MCP review without exposing secret values", () => {
+it("offers sandbox site blocking and saved Skill and MCP approval checkboxes", () => {
 	const page = orgAdminPage({ url: "https://example.test", publishableKey: "public" });
 	for (const tab of ["sandbox", "skills", "mcps"]) expect(page).toContain(`data-tab="${tab}"`);
 	expect(page).not.toContain('data-tab="policies"');
+	expect(page).not.toContain('data-tab="environments"');
 	expect(page).toContain("save_organization_sandbox_blocked_sites");
 	for (const rpc of ["save_organization_skill", "save_organization_mcp"]) expect(page).toContain(rpc);
-	expect(page).toContain("Host-managed secret reference");
+	expect(page).toContain('id="extension-approvals"');
+	expect(page).toContain('data-catalog-id=');
+	expect(page).toContain("Supabase MCP");
+	expect(page).toContain("Impeccable");
 });
 
-it("uses in-app forms for membership, classes, assignments, models, and prices", () => {
+it("uses in-app forms for membership and classes, and provider checkboxes for models", () => {
 	const page = orgAdminPage({ url: "https://example.test", publishableKey: "public" });
 	expect(page).not.toMatch(/\b(?:window\.)?prompt\s*\(/);
 	expect(page).toContain("document.createElement('dialog')");
-	for (const title of ["Add person", "Edit role", "Create class", "Manage teachers", "Edit model profile", "Set model price"]) {
+	for (const title of ["Add person", "Edit role", "Create class", "Manage teachers", "Approved models", "Save providers"]) {
 		expect(page).toContain(title);
 	}
+	expect(page).toContain("save_organization_providers");
+	expect(page).toContain('data-provider-id=');
 	expect(page).toContain("error.textContent=cause.message||String(cause)");
 });
 

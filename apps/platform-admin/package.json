@@ -15,6 +15,7 @@
   "dependencies": {
     "@pi-student/organization": "*",
     "@pi-student/supabase-adapter": "*",
-    "@pi-student/shared": "*"
+    "@pi-student/shared": "*",
+    "@supabase/supabase-js": "2.116.0"
   }
 }

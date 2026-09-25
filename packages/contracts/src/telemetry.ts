@@ -88,7 +88,8 @@ export interface LearningRecordEvent {
 	record: LearningRecord;
 }
 
-export type TelemetryEvent = UsageEvent | LearningTelemetryEvent | LearningRecordEvent;
+export interface SafetySignalEvent { type: "safety-signal"; classId: string; categories: string[]; }
+export type TelemetryEvent = UsageEvent | LearningTelemetryEvent | LearningRecordEvent | SafetySignalEvent;
 
 /** Destination-neutral telemetry boundary. Implementations may persist locally or remotely. */
 export interface TelemetrySink {

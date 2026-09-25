@@ -9,7 +9,7 @@ const sessionId = "77000000-0000-0000-0000-000000000001";
 const servers: ReturnType<typeof createModelGateway>[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve())))); });
 
-async function request(allowed = true, token = "student-jwt") {
+async function request(allowed = true, token = "student-jwt", options: Record<string, unknown> = {}) {
   const rpc = vi.fn(async (name: string) => name === "gateway_reserve_model_request" ? {
     data: allowed ? { allowed: true, warning: false, reservationId: "78000000-0000-0000-0000-000000000001", provider: "openai", providerModel: "gpt-test" } :
       { allowed: false, warning: true, action: "block_ai" }, error: null,
@@ -24,7 +24,7 @@ async function request(allowed = true, token = "student-jwt") {
   const port = (server.address() as AddressInfo).port;
   const response = await fetch(`http://127.0.0.1:${port}/projects/${projectId}/v1/chat/completions`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "x-pi-session-id": sessionId, "x-pi-thinking-level": "low" },
-    body: JSON.stringify({ model: profileId, messages: [{ role: "user", content: "Hi" }], stream: true }),
+    body: JSON.stringify({ model: profileId, messages: [{ role: "user", content: "Hi" }], stream: true, ...options }),
   });
   return { response, rpc, upstream };
 }
@@ -46,6 +46,19 @@ it("blocks at the hard limit before contacting the provider", async () => {
   expect(response.status).toBe(429);
   expect(rpc).toHaveBeenCalledTimes(1);
   expect(upstream).not.toHaveBeenCalled();
+});
+
+it("reserves and forwards a shorter output limit for inline completion", async () => {
+  const { response, rpc, upstream } = await request(true, "student-jwt", { max_tokens: 160 });
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(rpc).toHaveBeenCalledWith("gateway_reserve_model_request", expect.objectContaining({ output_bound_input: 160 }));
+  const upstreamArgs = upstream.mock.calls[0] as unknown as [string, RequestInit];
+  expect(JSON.parse(String(upstreamArgs[1].body)).max_tokens).toBe(160);
+  const modern = await request(true, "student-jwt", { max_completion_tokens: 160 });
+  expect(modern.response.status).toBe(200);
+  await modern.response.text();
+  expect(modern.rpc).toHaveBeenCalledWith("gateway_reserve_model_request", expect.objectContaining({ output_bound_input: 160 }));
 });
 
 it("rejects an expired student token before a budget reservation", async () => {

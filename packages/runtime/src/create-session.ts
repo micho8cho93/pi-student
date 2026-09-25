@@ -1,3 +1,4 @@
+import { createApprovedExtensions } from "./approved-extensions.js";
 import { registerLearnMode } from "@pi-student/education/extension";
 import {
 	type AgentSessionRuntime,
@@ -112,6 +113,7 @@ export async function createLearningAgentRuntime(
 					createSandboxExtension(sandboxRuntime),
 					createLearningExtension(workflow, modelRuntime, sandboxRuntime),
 					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services),
+			createApprovedExtensions(options.services),
 				],
 				extensionsOverride: removeLlamaCommand,
 				themesOverride: addBundledThemes,
@@ -146,12 +148,12 @@ export async function createLearningAgentRuntime(
 			// activate for the lifetime of the session.
 			tools: [...workflow.getRegisteredTools()],
 		});
-		sessionResult.session.setActiveToolsByName([...workflow.getAllowedTools()]);
+		sessionResult.session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
 		guardCapabilitySession(sessionResult.session, capabilityState(workflow));
 		const sessionWorkflow = workflow;
 		sessionWorkflow.onChange(() => {
 			sessionManager.appendCustomEntry("pi-student-workflow", structuredClone(sessionWorkflow.state));
-			sessionResult.session.setActiveToolsByName([...sessionWorkflow.getAllowedTools()]);
+			sessionResult.session.setActiveToolsByName([...sessionWorkflow.getAllowedTools(),"school_skill","school_mcp"]);
 		});
 		return {
 			...sessionResult,
@@ -322,7 +324,9 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 			await sandbox.stop();
 		});
 		pi.on("tool_call", async (event) => {
-			if (workflow.canUseTool(event.toolName)) return undefined;
+			// These tools only read approved guidance or curated public documentation;
+			// their handlers recheck school policy and project scope on every call.
+			if (event.toolName === "school_skill" || event.toolName === "school_mcp" || workflow.canUseTool(event.toolName)) return undefined;
 			return {
 				block: true,
 				reason: `Tool ${event.toolName} is not available during ${workflow.getStage()}.`,
@@ -547,6 +551,7 @@ export async function createLearningAgentSession(
 			createSandboxExtension(sandboxRuntime),
 			createLearningExtension(workflow, runtime, sandboxRuntime),
 			createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services),
+			createApprovedExtensions(options.services),
 		],
 		themesOverride: addBundledThemes,
 	});
@@ -560,19 +565,19 @@ export async function createLearningAgentSession(
 		tools: [...workflow.getRegisteredTools()],
 		sessionManager: SessionManager.inMemory(sandboxRuntime.getWorkspacePath()),
 	});
-	session.setActiveToolsByName([...workflow.getAllowedTools()]);
+	session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
 	guardCapabilitySession(session, capabilityState(workflow));
 	const unsubscribeFromStages = workflow.onChange(() => {
 		// Stage changes are committed by the workflow layer; sync Pi's active
 		// tools immediately before the next prompt is accepted.
-		session.setActiveToolsByName([...workflow.getAllowedTools()]);
+		session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
 	});
 
 	return {
 		session,
 		setActiveTools() {
 			// Called between turns after the controller commits a stage transition.
-			session.setActiveToolsByName([...workflow.getAllowedTools()]);
+			session.setActiveToolsByName([...workflow.getAllowedTools(),"school_skill","school_mcp"]);
 		},
 		dispose() {
 			unsubscribeFromStages();

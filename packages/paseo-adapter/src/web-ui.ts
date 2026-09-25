@@ -1,4 +1,6 @@
 import { patchLearnControlsBundle } from "./learn-controls-patch.js";
+import { patchFileEditorBundle } from "./file-editor-patch.js";
+import { editorCompletionUiScript } from "./editor-completion-ui.js";
 import { flowchartUiScript } from "./flowchart-ui.js";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -583,6 +585,7 @@ export const studentUiScript = (ecosystemPort: number) => `
         const mountProviderSettings = () => {
           const host = document.querySelector('[data-testid="host-page-providers-card"]');
           document.querySelectorAll("[data-pi-student-model-providers]").forEach(node => { if (!host || !host.contains(node)) node.remove(); });
+          if (host) for (const child of [...host.children]) if (!child.matches('[data-pi-student-model-providers]')) child.style.display = "none";
           if (!host || host.querySelector("[data-pi-student-model-providers]")) return;
           const section = element("div", "");
           section.dataset.piStudentModelProviders = "true";
@@ -644,16 +647,51 @@ export const studentUiScript = (ecosystemPort: number) => `
             catch (error) { status.ollama.textContent = error.message; }
             finally { control.disabled = false; }
           }));
+          const addApiKeyCard = provider => {
+            const card = addCard(provider.id, provider.label, "Connect with a " + provider.label + " API key.");
+            const field = input(provider.label + " API key", "API key", "password"); field.autocomplete = "new-password";
+            card.appendChild(field);
+            card.appendChild(button("Save API key", async event => {
+              const control = event.currentTarget; if (!field.value.trim()) return;
+              control.disabled = true;
+              try { await api("/providers/key", { method: "POST", body: JSON.stringify({ providerId: provider.id, apiKey: field.value }) }); field.value = ""; await refreshProviderSettings(); }
+              catch (error) { status[provider.id].textContent = error.message; }
+              finally { control.disabled = false; }
+            }));
+          };
+          const supabase = addCard("supabase-mcp", "Supabase MCP", "Connect your own Supabase account for read-only project tools.");
+          const supabaseButton = button("Sign in with Supabase", async event => {
+            const control = event.currentTarget; control.disabled = true;
+            const popup = window.open("about:blank", "_blank");
+            if (popup) popup.opener = null;
+            try {
+              const state = await api("/providers/supabase/login", { method: "POST", body: "{}" });
+              if (state.authorizationUrl) { if (popup) popup.location.href = state.authorizationUrl; else window.open(state.authorizationUrl, "_blank", "noopener"); }
+              else popup?.close();
+              status["supabase-mcp"].textContent = state.connected ? "✓ Connected" : "Complete sign-in in the new tab, then refresh this page.";
+            } catch (error) { popup?.close(); status["supabase-mcp"].textContent = error.message; }
+            finally { control.disabled = false; }
+          }); supabase.appendChild(supabaseButton);
           host.appendChild(section);
 
           const refreshProviderSettings = async () => {
             try {
               const data = await api("/providers");
+              const visible = new Set(data.providers.map(provider => provider.id));
+              for (const [id, value] of Object.entries(cards)) value.card.hidden = !visible.has(id);
+              data.providers.forEach(provider => { if (!cards[provider.id] && provider.method === "API key") addApiKeyCard(provider); });
+              intro.textContent = data.providers.length ? "Connect approved providers for Pi Student models. Credentials are stored in Pi's local credential files." : "No model providers are approved for this class project.";
               data.providers.forEach(provider => {
                 status[provider.id].textContent = provider.configured ? "✓ Connected" : "Not connected";
                 cards[provider.id].models.textContent = provider.models?.length ? "Models: " + provider.models.slice(0, 6).join(", ") + (provider.models.length > 6 ? "…" : "") : "";
                 if (provider.id === "openai-codex") connectCodex.textContent = provider.configured ? "Reconnect Codex" : "Sign in to Codex";
               });
+              const supabaseState = await api("/providers/supabase");
+              supabase.hidden = !supabaseState.available;
+              if (supabaseState.available) {
+                status["supabase-mcp"].textContent = supabaseState.connected ? "✓ Connected" : "Not connected";
+                supabaseButton.textContent = supabaseState.connected ? "Reconnect Supabase" : "Sign in with Supabase";
+              }
               ollamaUrl.value = data.ollamaUrl || ollamaUrl.value;
               const login = data.codexLogin;
               if (login?.status !== "connecting") { codexLoginActive = false; connectCodex.disabled = false; }
@@ -796,12 +834,14 @@ export async function patchPaseoWebUi(paseoExecutable: string, ecosystemPort = 6
 	}
 
 	await patchLearnControlsBundle(indexPath);
+	await patchFileEditorBundle(indexPath);
 	const original = await readFile(indexPath, "utf8");
-	const script = studentUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort);
+	const script = studentUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort) + editorCompletionUiScript(ecosystemPort);
 	if (original.includes(script)) return false;
 	const html = original
 		.replace(/\s*<script data-pi-student-ui="[^"]*">[\s\S]*?<\/script>/g, "")
-		.replace(/\s*<script data-pi-student-flowchart="[^"]*">[\s\S]*?<\/script>/g, "");
+		.replace(/\s*<script data-pi-student-flowchart="[^"]*">[\s\S]*?<\/script>/g, "")
+		.replace(/\s*<script data-pi-student-editor-completion="[^"]*">[\s\S]*?<\/script>/g, "");
 	const insertionPoint = "</head>";
 	if (!html.includes(insertionPoint)) throw new Error(`Paseo web UI is missing its head element: ${indexPath}`);
 	await writeFile(indexPath, html.replace(insertionPoint, `${script}\n  ${insertionPoint}`));

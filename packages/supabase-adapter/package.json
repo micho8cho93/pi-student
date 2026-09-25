@@ -15,7 +15,8 @@
     "./telemetry-sink": "./dist/telemetry-sink.js",
     "./governance-policy": "./dist/governance-policy.js",
     "./model-admission": "./dist/model-admission.js",
-    "./institutional-environment": "./dist/institutional-environment.js"
+    "./institutional-environment": "./dist/institutional-environment.js",
+    "./provider-approvals": "./dist/provider-approvals.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -28,6 +29,7 @@
     "@pi-student/organization": "*",
     "@pi-student/policy": "*",
     "@pi-student/shared": "*",
+    "@pi-student/telemetry": "*",
     "@supabase/supabase-js": "2.116.0"
   }
 }

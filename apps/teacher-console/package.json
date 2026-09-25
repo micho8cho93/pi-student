@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "pi-student-teacher": "dist/cli.js" },
-  "exports": { "./*": "./dist/*.js" },
+  "bin": {
+    "pi-student-teacher": "dist/cli.js"
+  },
+  "exports": {
+    "./*": "./dist/*.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "package": "../../scripts/package-teacher-console.sh",
@@ -19,6 +23,7 @@
     "@pi-student/shared": "*",
     "@pi-student/telemetry": "*",
     "@pi-student/supabase-adapter": "*",
-    "@supabase/supabase-js": "2.116.0"
+    "@supabase/supabase-js": "2.116.0",
+    "@pi-student/classroom-ui": "*"
   }
 }

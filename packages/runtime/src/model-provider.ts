@@ -28,6 +28,8 @@ export class DirectModelProvider implements StudentModelProvider {
 			headers: { ...(sessionId ? { "X-Pi-Session-Id": sessionId } : {}), ...(thinkingLevel ? { "X-Pi-Thinking-Level": thinkingLevel } : {}) },
 			models: profiles.filter(profile => profile.available).map(profile => ({
 				id: profile.id, name: profile.displayName, api: "openai-completions", reasoning: profile.allowedThinkingLevels.some(level => level !== "off"),
+				thinkingLevelMap: Object.fromEntries((["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)
+					.map(level => [level, profile.allowedThinkingLevels.includes(level) ? (level === "off" ? undefined : level) : null])),
 				input: ["text"] as ("text")[], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 32_000, maxTokens: 4_096,
 			})),

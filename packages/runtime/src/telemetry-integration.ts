@@ -1,3 +1,4 @@
+import { chatSafetyCategories } from "./chat-safety.js";
 import { randomUUID } from "node:crypto";
 import { createStudentClassroomExtension, type ClassroomRuntimeServices } from "./student-classroom.js";
 import {
@@ -5,7 +6,7 @@ import {
 	type ExtensionContext,
 	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import type { IdentityProvider, ModelAdmissionProvider, PolicyProvider, TelemetrySink } from "@pi-student/contracts";
+import type { IdentityProvider, ModelAdmissionProvider, PolicyProvider, TelemetrySink, RuntimeConfiguration } from "@pi-student/contracts";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
 import { LearningEventBus } from "@pi-student/telemetry/events";
@@ -18,6 +19,7 @@ import { capabilityState } from "@pi-student/policy/capability-runtime";
 const TEST_COMMAND = /^(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+(?:test|build|lint))\b/i;
 
 export interface StudentRuntimeServices {
+	extensionEnvironment?: () => Promise<Pick<RuntimeConfiguration,"skills"|"mcps"|"sandbox"> | undefined>;
 	identityProvider?: IdentityProvider;
 	policyProvider?: PolicyProvider;
 	telemetrySink?: TelemetrySink;
@@ -107,6 +109,7 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 		});
 		pi.on("thinking_level_select", async (event) => bus.emit({ type: "THINKING_LEVEL_CHANGED", level: event.level }));
 		pi.on("input", async (_event, ctx) => {
+            if(activeContext.classId&&services.telemetrySink){const categories=chatSafetyCategories(_event.text);if(categories.length){try{await services.telemetrySink.record({type:"safety-signal",classId:activeContext.classId,categories});}catch{ctx.ui.setStatus("pi-safety-sync","Safety signal could not sync.");}}}
 			if (!activeContext.organizationId || !activeContext.projectId || !services.modelAdmission || !ctx.model) return;
 			try {
 				const decision = await services.modelAdmission.check(activeContext.projectId, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), recorder.getRecord()?.session.id);

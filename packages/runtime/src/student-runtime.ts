@@ -27,7 +27,7 @@ export class PiStudentRuntime {
 	readonly services: StudentRuntimeServices;
 	constructor(readonly options: CreateStudentRuntimeOptions) {
 		this.sandboxManager = new SandboxManager(options.projectPath, { provider: options.sandboxProvider });
-		this.services = { identityProvider: options.identityProvider, policyProvider: options.policyProvider, telemetrySink: options.telemetrySink, modelAdmission: options.modelAdmission, classroom: options.classroom, contextStore: options.classroom?.contextStore, configureEnvironment: (projectId) => this.selectEnvironment(projectId) };
+		this.services = { extensionEnvironment: async () => { if(!this.selectedProjectId)return; const identity=await this.options.identityProvider.getIdentity();const policy=await this.options.policyProvider.resolvePolicy({identity,projectId:this.selectedProjectId});return this.options.environmentProvider?.resolve(this.selectedProjectId,policy); }, identityProvider: options.identityProvider, policyProvider: options.policyProvider, telemetrySink: options.telemetrySink, modelAdmission: options.modelAdmission, classroom: options.classroom, contextStore: options.classroom?.contextStore, configureEnvironment: (projectId) => this.selectEnvironment(projectId) };
 	}
 	get modelRuntime() { return this.options.modelProvider.runtime; }
 	get sandbox(): SandboxRuntime { return this.sandboxManager.runtime; }

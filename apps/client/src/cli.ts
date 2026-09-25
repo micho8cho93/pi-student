@@ -42,7 +42,6 @@ async function main(): Promise<void> {
 	}
 	if (command === "gui" || command === "web") {
 		if (flags.length) throw new Error(`Unknown GUI option: ${flags[0]}`);
-		await ensureGuiProviderConfigured();
 		await launchPaseoGui({ runtimeEntry: CLIENT_RUNTIME_ENTRY });
 		return;
 	}
@@ -151,10 +150,11 @@ async function runTerminal(flags: string[]): Promise<void> {
 	try {
 	await studentRuntime.start();
 	const modelRuntime = studentRuntime.modelRuntime;
+	const allowedProviders = await managedProviderChoices(studentRuntime);
 	// Finish the async catalog/auth snapshot before attaching readline. This
 	// prevents piped first-run input from being consumed while the runtime loads.
 	await modelRuntime.refresh({ allowNetwork: false });
-	const ready = await findReadyProvider(modelRuntime);
+	const ready = await findReadyProvider(modelRuntime, allowedProviders);
 	if (!ready) startupCues.stop("Provider setup needed");
 	const terminal = createInterface({ input: process.stdin, output: process.stdout });
 	let setup;
@@ -165,6 +165,7 @@ async function runTerminal(flags: string[]): Promise<void> {
 			readline: terminal,
 			skipRefresh: true,
 			skipReadinessCheck: true,
+			allowedProviders,
 		});
 	} catch (error) {
 		if (error instanceof SetupCancelledError) {
@@ -208,7 +209,7 @@ async function runTerminal(flags: string[]): Promise<void> {
 		const agent = await createLearningAgentSession(cwd, workflow, modelRuntime, model, studentRuntime.sandbox, { services: studentRuntime.services });
 		startupCues.stop("Pi Student is ready");
 		try {
-			await runRepl({ workflow, agent, modelRuntime, inputReader: terminal });
+			await runRepl({ workflow, agent, modelRuntime, inputReader: terminal, allowedProviders });
 		} finally {
 			agent.dispose();
 		}
@@ -254,9 +255,11 @@ async function runSharedRuntime(flags: string[]): Promise<void> {
 	let handedToRpc = false;
 	try {
 		const modelRuntime = studentRuntime.modelRuntime;
+		const allowedProviders = await managedProviderChoices(studentRuntime);
 		await modelRuntime.refresh({ allowNetwork: false });
 		const requested = args.model ? splitModelId(args.model) : undefined;
-		const ready = requested ? undefined : await findReadyProvider(modelRuntime);
+		const ready = requested ? undefined : await findReadyProvider(modelRuntime, allowedProviders);
+		if (requested && allowedProviders && !allowedProviders.includes(requested.provider)) throw new Error(`Provider ${requested.provider} is not approved for this organization.`);
 		const model = requested
 			? modelRuntime.getModel(requested.provider, requested.modelId)
 			: ready ? modelRuntime.getModel(ready.providerId, ready.modelId) : undefined;
@@ -276,30 +279,10 @@ async function runSharedRuntime(flags: string[]): Promise<void> {
 	}
 }
 
-async function ensureGuiProviderConfigured(): Promise<void> {
-	const modelRuntime = (await DirectModelProvider.create()).runtime;
-	await modelRuntime.refresh({ allowNetwork: false });
-	if (await findReadyProvider(modelRuntime)) return;
-	if (!process.stdin.isTTY || !process.stdout.isTTY) {
-		throw new Error("Pi Student needs a model provider before the GUI can start. Run pi-student terminal once to complete setup.");
-	}
-	const terminal = createInterface({ input: process.stdin, output: process.stdout });
-	try {
-		await ensureProviderConfigured(modelRuntime, {
-			input: process.stdin,
-			output: process.stdout,
-			readline: terminal,
-			skipRefresh: true,
-			skipReadinessCheck: true,
-		});
-	} catch (error) {
-		if (error instanceof SetupCancelledError) {
-			throw new Error("Provider setup was cancelled. Run pi-student gui when you are ready to continue.");
-		}
-		throw error;
-	} finally {
-		terminal.close();
-	}
+async function managedProviderChoices(studentRuntime: Awaited<ReturnType<typeof createApplicationRuntime>>): Promise<string[] | undefined> {
+	const policy = (await studentRuntime.configuration()).policy;
+	if (!policy?.sourceVersions?.organization) return undefined;
+	return [...new Set(policy.settings.models.map(model => model.split("/")[0]).filter(provider => provider !== "institution"))];
 }
 
 async function createApplicationRuntime(projectPath: string) {
@@ -326,7 +309,7 @@ async function createApplicationRuntime(projectPath: string) {
 		environmentProvider: new SupabaseInstitutionalEnvironmentProvider(client),
 		policyProvider: new SupabaseGovernancePolicyProvider(client, new StoredPolicyProvider(() => contextStore.read()), gatewayUrl ? {
 			url: gatewayUrl, configure: (projectId, url, profiles, token) => modelProvider.configureHostedProfiles(projectId, url, profiles, token),
-		} : undefined),
+		} : undefined, () => modelProvider.runtime.getModels().map(model => ({ provider: model.provider, id: model.id }))),
 		modelAdmission: new SupabaseModelAdmissionProvider(client, (token, sessionId, thinkingLevel) => modelProvider.refreshHostedToken(token, sessionId, thinkingLevel)),
 		telemetrySink: new SupabaseTelemetrySink(client),
 		classroom: {

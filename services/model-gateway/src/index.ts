@@ -78,11 +78,16 @@ export function createModelGateway(options: GatewayOptions) {
       if (Buffer.byteLength(JSON.stringify(body), "utf8") + body.messages.length * 100 > INPUT_BOUND) {
         return respond(response, 413, { error: { message: "Model context is too large." } });
       }
+      const requestedOutput = body.max_tokens ?? body.max_completion_tokens ?? OUTPUT_BOUND;
+      if (!Number.isSafeInteger(requestedOutput) || Number(requestedOutput) < 1 || Number(requestedOutput) > OUTPUT_BOUND) {
+        return respond(response, 400, { error: { message: "Invalid model output limit." } });
+      }
+      const outputBound = Number(requestedOutput);
       const thinking = request.headers["x-pi-thinking-level"];
       const thinkingLevel = typeof thinking === "string" ? thinking : "off";
       const reserved = await options.db.rpc("gateway_reserve_model_request", { user_id_input: verified.data.user.id,
         project_id_input: match[1], profile_id_input: profileId, thinking_level_input: thinkingLevel,
-        input_bound_input: INPUT_BOUND, output_bound_input: OUTPUT_BOUND });
+        input_bound_input: INPUT_BOUND, output_bound_input: outputBound });
       if (reserved.error) return respond(response, 403, { error: { message: "Institution model access denied." } });
       const decision = reserved.data as { allowed: boolean; warning: boolean; action?: string; reservationId?: string; provider?: string; providerModel?: string };
       if (!decision.allowed) return respond(response, 429, { error: { message: "The institution model budget or token limit has been reached.", action: decision.action } });
@@ -93,7 +98,7 @@ export function createModelGateway(options: GatewayOptions) {
       if (base.protocol !== "https:" && !(base.protocol === "http:" && ["localhost", "127.0.0.1"].includes(base.hostname))) throw new Error("Provider endpoint requires HTTPS.");
       const upstreamResponse = await fetchImpl(`${base.toString().replace(/\/$/, "")}/chat/completions`, {
         method: "POST", headers: { authorization: `Bearer ${upstream.apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ ...body, model: decision.providerModel, stream: false, stream_options: undefined, max_tokens: OUTPUT_BOUND }),
+        body: JSON.stringify({ ...body, model: decision.providerModel, stream: false, stream_options: undefined, max_completion_tokens: undefined, max_tokens: outputBound }),
       });
       if (!upstreamResponse.ok) return respond(response, 502, { error: { message: "Institution model provider failed." } });
       const completion = await upstreamResponse.json() as Record<string, unknown>;

@@ -33,12 +33,14 @@ it("renders account, class, and display settings with two deletion confirmations
 
 it("offers teacher class, student, extension, and usage controls", () => {
 	const page = dashboardPage({ url: "https://example.test", publishableKey: "public" });
-	for (const area of ["classes", "students", "skills", "mcps", "usage"]) {
+	for (const area of ["classes", "students", "models", "skills", "mcps", "usage"]) {
 		expect(page).toContain(`id="side-${area}"`);
 		if (area !== "classes") expect(page).toContain(`id="${area}-view"`);
 	}
 	expect(page).toContain("teacher_extension_catalog");
 	expect(page).toContain("set_teacher_extension_enabled");
+	expect(page).toContain("Save selections");
+	expect(page).toContain("approved_provider_ids");
 	expect(page).toContain("teacher_usage_summary");
 	expect(page).toContain("save_governance_policy");
 });

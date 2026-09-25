@@ -7,6 +7,8 @@ import { DEFAULT_OLLAMA_URL, OLLAMA_PROVIDER_ID, readOllamaConfig, registerOllam
 import { createTheme, indent, renderSetupHeader, type TerminalTheme } from "./ui.js";
 
 export interface SetupIO {
+	/** Managed classes expose only organization-approved providers. */
+	allowedProviders?: readonly string[];
 	input?: NodeJS.ReadableStream;
 	output?: NodeJS.WritableStream;
 	readline?: Interface;
@@ -40,6 +42,8 @@ const PROVIDERS: readonly ProviderChoice[] = [
 	{ id: "mistral", label: "Mistral", url: "https://console.mistral.ai/api-keys/" },
 	{ id: "groq", label: "Groq", url: "https://console.groq.com/keys" },
 	{ id: "deepseek", label: "DeepSeek", url: "https://platform.deepseek.com/api_keys" },
+	{ id: "kimi-coding", label: "Kimi Coding" },
+	{ id: "moonshotai", label: "Moonshot AI" },
 ];
 
 export async function ensureProviderConfigured(runtime: ModelRuntime, io: SetupIO = {}): Promise<ProviderSetupResult> {
@@ -49,11 +53,11 @@ export async function ensureProviderConfigured(runtime: ModelRuntime, io: SetupI
 	if (!io.skipRefresh) await refreshRuntime(runtime);
 
 	if (!io.skipReadinessCheck) {
-		const ready = await findReadyProvider(runtime);
+		const ready = await findReadyProvider(runtime, io.allowedProviders);
 		if (ready) return ready;
 	}
 
-	const configured = availableProviderChoices(runtime).filter((choice) => runtime.getProviderAuthStatus(choice.id).configured);
+	const configured = availableProviderChoices(runtime, io.allowedProviders).filter((choice) => runtime.getProviderAuthStatus(choice.id).configured);
 	const ollamaSaved = Boolean(await readOllamaConfig());
 	const reason = ollamaSaved && !runtime.getProvider(OLLAMA_PROVIDER_ID)
 		? "Saved Ollama connection is unavailable. Start Ollama and check that it has a downloaded model."
@@ -61,7 +65,7 @@ export async function ensureProviderConfigured(runtime: ModelRuntime, io: SetupI
 		? "Pi found a configured provider, but it is not currently usable. You can replace its key below."
 		: "No model provider is configured yet.";
 	output.write(`${renderSetupHeader(theme)}${theme.warning(`  ${reason}`)}\n`);
-	return runProviderSetup(runtime, { input, output, readline: io.readline, theme });
+	return runProviderSetup(runtime, { ...io, input, output, readline: io.readline, theme });
 }
 
 export async function runProviderSetup(
@@ -76,7 +80,8 @@ export async function runProviderSetup(
 	const lines = readline[Symbol.asyncIterator]();
 
 	try {
-		const choices = availableProviderChoices(runtime);
+		const choices = availableProviderChoices(runtime, io.allowedProviders);
+		if (!choices.length) throw new Error("No model providers are approved for this organization.");
 		output.write(`${theme.bold("Choose a provider")} ${theme.dim("(number, provider id, or q to quit)")}\n`);
 		choices.forEach((choice, index) => {
 			const status = runtime.getProviderAuthStatus(choice.id).configured
@@ -104,7 +109,7 @@ export async function runProviderSetup(
 				await runtime.refresh({ allowNetwork: false, providers: [OLLAMA_PROVIDER_ID] });
 			} catch (error) {
 				output.write(`${theme.error(error instanceof Error ? error.message : String(error))}\n`);
-				return runProviderSetup(runtime, { input, output, readline, theme });
+				return runProviderSetup(runtime, { ...io, input, output, readline, theme });
 			}
 			output.write(`\n${theme.bold("Downloaded models")}\n`);
 			models.forEach((id, index) => output.write(`  ${theme.accent(String(index + 1))}. ${id}\n`));
@@ -120,7 +125,7 @@ export async function runProviderSetup(
 		const apiKey = await askSecret(lines, input, output, "API key › ");
 		if (!apiKey.trim()) {
 			output.write(`${theme.error("An API key is required to continue.")}\n`);
-			return runProviderSetup(runtime, { input, output, readline, theme });
+			return runProviderSetup(runtime, { ...io, input, output, readline, theme });
 		}
 
 		await persistApiKey(choice.id, apiKey.trim());
@@ -129,7 +134,7 @@ export async function runProviderSetup(
 		if (!model) {
 			output.write(`${theme.error(`Pi could not activate ${guide.label}'s models.`)}\n`);
 			output.write(`${indent("The key was saved. Check that it is valid, has billing enabled, and is allowed to use the selected API.")}\n`);
-			return runProviderSetup(runtime, { input, output, readline, theme });
+			return runProviderSetup(runtime, { ...io, input, output, readline, theme });
 		}
 		output.write(`${theme.success("✓ API key saved")} ${theme.dim(`${guide.label} · ${model.id}`)}\n`);
 		output.write(`${theme.dim("  The first message verifies provider access, billing, and model availability.")}\n`);
@@ -170,7 +175,7 @@ export async function runOAuthSetup(
 	const readline = io.readline ?? createInterface({ input, output });
 	const ownsReadline = !io.readline;
 	const lines = readline[Symbol.asyncIterator]();
-	const providers = availableProviderChoices(runtime).filter((choice) => runtime.getProvider(choice.id)?.auth.oauth);
+	const providers = availableProviderChoices(runtime, io.allowedProviders).filter((choice) => runtime.getProvider(choice.id)?.auth.oauth);
 	try {
 		if (providers.length === 0) throw new Error("No OAuth-capable provider is available in this Pi SDK configuration.");
 		output.write(`\n${theme.bold("OAuth providers")} ${theme.dim("(number, provider id, or q to cancel)")}\n`);
@@ -183,19 +188,20 @@ export async function runOAuthSetup(
 	}
 }
 
-export async function findReadyProvider(runtime: ModelRuntime): Promise<ProviderSetupResult | undefined> {
-	for (const choice of availableProviderChoices(runtime)) {
+export async function findReadyProvider(runtime: ModelRuntime, allowedProviders?: readonly string[]): Promise<ProviderSetupResult | undefined> {
+	for (const choice of availableProviderChoices(runtime, allowedProviders)) {
 		if (!runtime.getProviderAuthStatus(choice.id).configured) continue;
 		const model = await pickModel(runtime, choice.id);
 		if (model) return { providerId: choice.id, modelId: model.id };
 	}
 }
 
-function availableProviderChoices(runtime: ModelRuntime) {
-	const curated = PROVIDERS.filter((choice) => choice.local || runtime.getProvider(choice.id));
+function availableProviderChoices(runtime: ModelRuntime, allowedProviders?: readonly string[]) {
+	const allowed = (id: string) => !allowedProviders || allowedProviders.includes(id);
+	const curated = PROVIDERS.filter((choice) => allowed(choice.id) && (choice.local || runtime.getProvider(choice.id)));
 	const curatedIds = new Set(curated.map((choice) => choice.id));
 	const configuredExtras = runtime.getProviders()
-		.filter((provider) => !curatedIds.has(provider.id) && runtime.getProviderAuthStatus(provider.id).configured)
+		.filter((provider) => allowed(provider.id) && !curatedIds.has(provider.id) && runtime.getProviderAuthStatus(provider.id).configured)
 		.map((provider): ProviderChoice => ({ id: provider.id, label: provider.name, oauth: Boolean(provider.auth.oauth) }));
 	return [...curated, ...configuredExtras];
 }
