@@ -9,10 +9,10 @@ const sessionId = "77000000-0000-0000-0000-000000000001";
 const servers: ReturnType<typeof createModelGateway>[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve())))); });
 
-async function request(allowed = true, token = "student-jwt", options: Record<string, unknown> = {}) {
+async function request(allowed = true, token = "student-jwt", options: Record<string, unknown> = {}, action = "block_ai") {
   const rpc = vi.fn(async (name: string) => name === "gateway_reserve_model_request" ? {
     data: allowed ? { allowed: true, warning: false, reservationId: "78000000-0000-0000-0000-000000000001", provider: "openai", providerModel: "gpt-test" } :
-      { allowed: false, warning: true, action: "block_ai" }, error: null,
+      { allowed: false, warning: true, action }, error: null,
   } : { data: null, error: null });
   const db = { auth: { getUser: vi.fn(async (jwt: string) => jwt === "student-jwt" ? { data: { user: { id: "student-1" } }, error: null } : { data: { user: null }, error: new Error("expired") }) }, rpc } as unknown as Pick<SupabaseClient, "auth" | "rpc">;
   const upstream = vi.fn(async () => new Response(JSON.stringify({ id: "reply-1", created: 1, model: "gpt-test",
@@ -59,6 +59,22 @@ it("reserves and forwards a shorter output limit for inline completion", async (
   expect(modern.response.status).toBe(200);
   await modern.response.text();
   expect(modern.rpc).toHaveBeenCalledWith("gateway_reserve_model_request", expect.objectContaining({ output_bound_input: 160 }));
+});
+
+it("classifies tool-using requests as agent work for the tutoring reserve", async () => {
+  const tutoring = await request();
+  await tutoring.response.text();
+  expect(tutoring.rpc).toHaveBeenCalledWith("gateway_reserve_model_request", expect.objectContaining({ agent_request_input: false }));
+  const agent = await request(true, "student-jwt", { tools: [{ type: "function", function: { name: "edit", parameters: {} } }] });
+  await agent.response.text();
+  expect(agent.rpc).toHaveBeenCalledWith("gateway_reserve_model_request", expect.objectContaining({ agent_request_input: true }));
+});
+
+it("explains that tutoring continues when only the agent lane is closed", async () => {
+  const { response, upstream } = await request(false, "student-jwt", { tools: [{ type: "function", function: { name: "edit", parameters: {} } }] }, "assistance_only");
+  expect(response.status).toBe(429);
+  expect((await response.json() as { error: { message: string; action: string } }).error).toMatchObject({ action: "assistance_only", message: expect.stringContaining("Tutoring") });
+  expect(upstream).not.toHaveBeenCalled();
 });
 
 it("rejects an expired student token before a budget reservation", async () => {

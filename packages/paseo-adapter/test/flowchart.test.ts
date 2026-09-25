@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Script } from "node:vm";
-import { collectFlowchartSource, generateFlowchart, parseFlowchartResponse } from "@pi-student/paseo-adapter/flowchart";
+import { collectFlowchartSource, findFlowchartNodesForFile, FlowchartModelError, generateFlowchart, locateSymbolLine, parseFlowchartResponse } from "@pi-student/paseo-adapter/flowchart";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ExecutionContext } from "@pi-student/contracts";
 import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
@@ -47,7 +47,57 @@ describe("student flowchart", () => {
 			const result = await generateFlowchart(root, runtime, context, admission);
 			expect(result.model).toBe("openai/approved");
 			expect(completeSimple).toHaveBeenCalledWith(approved, expect.anything(), expect.anything());
-			expect(admission).toHaveBeenCalledWith("openai", "approved", "off");
+			expect(admission).toHaveBeenCalledWith("openai", "approved", "off", "architecture");
+		} finally { await rm(root, { recursive: true, force: true }); }
+	});
+
+	it("links nodes to source only through files the generator read", async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), "pi-flowchart-refs-"));
+		try {
+			await mkdir(path.join(root, "src"));
+			await writeFile(path.join(root, "src", "socket.ts"), "import { retry } from './retry';\n\nexport async function reconnect(attempt: number) {\n  return retry(attempt);\n}\n");
+			await writeFile(path.join(root, "src", "retry.ts"), "export const retry = (n: number) => n;\n");
+			await writeFile(path.join(root, ".env"), "SECRET=hidden");
+			const nodes = [
+				{ id: "reconnect", label: "Reconnect", file: "src/socket.ts", symbol: "reconnect", line: 999, relatedFiles: ["./src/retry.ts", "../outside.ts", ".env", "src/socket.ts"] },
+				{ id: "guess", label: "Guessed line", file: "src/retry.ts", line: 999 },
+				{ id: "outside", label: "Outside", file: "../other/app.ts", symbol: "run" },
+				{ id: "secret", label: "Secrets", file: ".env", line: 1 },
+				{ id: "missing", label: "Missing", file: "src/missing.ts" },
+				{ id: "absolute", label: "Absolute", file: path.join(root, "src", "socket.ts") },
+				{ id: "injected", label: "Injected symbol", file: "src/retry.ts", symbol: "x; rm -rf /" },
+				{ id: "plain", label: "Plain step" },
+			];
+			const completeSimple = vi.fn(async () => ({ stopReason: "stop", content: [{ type: "text", text: JSON.stringify({ title: "Demo", nodes, edges: [] }) }] }));
+			const model = { provider: "openai", id: "approved", name: "Approved", reasoning: false };
+			const runtime = { getAvailable: async () => [model], getProviderAuthStatus: () => ({ configured: true }), completeSimple } as unknown as ModelRuntime;
+			const context = { identity: { kind: "personal" }, workspacePath: root, sandbox: { mode: "gondolin" } } as ExecutionContext;
+			const chart = await generateFlowchart(root, runtime, context);
+			const byId = Object.fromEntries(chart.nodes.map(node => [node.id, node]));
+			expect(byId.reconnect).toMatchObject({ file: "src/socket.ts", symbol: "reconnect", line: 3, relatedFiles: ["src/retry.ts"] });
+			expect(byId.guess).toEqual(expect.objectContaining({ file: "src/retry.ts" }));
+			expect(byId.guess).not.toHaveProperty("line");
+			for (const id of ["outside", "secret", "missing", "absolute", "plain"]) {
+				expect(byId[id]).not.toHaveProperty("file");
+				expect(byId[id]).not.toHaveProperty("symbol");
+			}
+			expect(byId.injected).not.toHaveProperty("symbol");
+			expect(findFlowchartNodesForFile(chart, "src/retry.ts").map(node => node.id)).toEqual(["reconnect", "guess", "injected"]);
+			expect(findFlowchartNodesForFile(chart, path.join(root, "src", "socket.ts")).map(node => node.id)).toEqual(["reconnect"]);
+			expect(locateSymbolLine("class Socket {}\nconst open = () => 1;\n", "Socket.open")).toBe(2);
+		} finally { await rm(root, { recursive: true, force: true }); }
+	});
+
+	it("reports model failures separately so the existing map and manual work stay usable", async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), "pi-flowchart-outage-"));
+		try {
+			await writeFile(path.join(root, "main.ts"), "export const ready = true;");
+			const model = { provider: "openai", id: "approved", name: "Approved", reasoning: false };
+			const context = { identity: { kind: "personal" }, workspacePath: root, sandbox: { mode: "gondolin" } } as ExecutionContext;
+			for (const completeSimple of [vi.fn(async () => { throw new Error("fetch failed"); }), vi.fn(async () => ({ stopReason: "error", errorMessage: "503", content: [] }))]) {
+				const runtime = { getAvailable: async () => [model], getProviderAuthStatus: () => ({ configured: true }), completeSimple } as unknown as ModelRuntime;
+				await expect(generateFlowchart(root, runtime, context)).rejects.toBeInstanceOf(FlowchartModelError);
+			}
 		} finally { await rm(root, { recursive: true, force: true }); }
 	});
 
@@ -87,5 +137,12 @@ describe("student flowchart", () => {
 		expect(script).toContain("addMenuChoice");
 		expect(script).toContain("new-workspace-launch-option-blank");
 		expect(script).toContain("projectName=");
+		expect(script).toContain('"flowchart.node_selected"');
+		expect(script).toContain('"open", "file:" + encoded');
+		expect(script).toContain("pi-student:file-opened");
+		expect(script).toContain("Showing the previous flowchart.");
+		// Paseo decodes ?open=file:<base64url>; the browser encoding must match it.
+		const encode = new Function("file", `return ${script.match(/const encoded = ([^;]+);/)![1]};`) as (file: string) => string;
+		for (const file of ["src/socket.ts", "src/ünïcode/a+b?.ts"]) expect(encode(file)).toBe(Buffer.from(file, "utf8").toString("base64url"));
 	});
 });

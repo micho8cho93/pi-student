@@ -180,7 +180,7 @@ async function renderTeacherUsageLimits(classId,projectId){
   const selectedClass=allClasses.find(item=>item.id===classId);
   const project=usageProjects.find(item=>item.id===projectId);
   if(!project){root.replaceChildren(node('div',{class:'notice error'},'Project details could not be loaded. Select the class again.'));return}
-  let existing={},delegated=['limits.minutes','limits.turns','limits.tokens','limits.cost'];
+  let existing={},delegated=['limits.minutes','limits.turns','limits.tutoringTurns','limits.tokens','limits.cost'];
   if(selectedClass?.organization_id){
     const {data,error}=await db.rpc('governance_context',{project_id_input:projectId});
     if(error){root.replaceChildren(node('div',{class:'notice error'},errorMessage(error)));return}
@@ -188,11 +188,11 @@ async function renderTeacherUsageLimits(classId,projectId){
     delegated=(data.layers||[]).find(item=>item.scope==='organization')?.delegatedPaths||[];
   }
   if(el('usage-project').value!==projectId)return;
-  const allowed=['minutes','turns','tokens','cost'].filter(key=>delegated.includes('limits.'+key));
+  const allowed=['minutes','turns','tutoringTurns','tokens','cost'].filter(key=>delegated.includes('limits.'+key));
   if(!allowed.length){root.replaceChildren(node('div',{class:'notice'},'Your school manages this project’s usage limits.'));return}
-  const form=node('form',{class:'panel usage-limit-form'},[node('h2',{},'Project session limits'),node('p',{class:'muted'},'Blank values inherit school limits in managed classes or remain unlimited in standalone classes. Token and cost limits are checked after a model response.')]);
+  const form=node('form',{class:'panel usage-limit-form'},[node('h2',{},'Project session limits'),node('p',{class:'muted'},'Blank values inherit school limits in managed classes or remain unlimited in standalone classes. Agent limits switch the AI to tutoring (hints and explanations, no edits or commands); token and cost limits stop all AI and are checked after a model response.')]);
   const fields=node('div',{class:'limit-fields'});
-  for(const [key,label] of [['minutes','Minutes'],['turns','Model responses'],['tokens','Tokens'],['cost','Cost (USD)']]){
+  for(const [key,label] of [['minutes','Agent minutes'],['turns','Agent responses'],['tutoringTurns','Tutoring responses after agent limit'],['tokens','Tokens'],['cost','Cost (USD)']]){
     if(!allowed.includes(key))continue;
     const input=node('input',{name:key,class:'field',type:'number',min:key==='cost'?'0.01':'1',max:'1000000000',step:key==='cost'?'0.01':'1'});
     input.value=selectedClass?.organization_id?(existing.limits?.[key]??''):(project.capability_policy?.limits?.[key]??'');

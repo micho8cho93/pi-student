@@ -8,7 +8,7 @@ export const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
 	schemaVersion: 1, reasoningLevels: [...THINKING_LEVELS], models: [],
 	fileEditing: true, terminal: true, dependencyInstallation: true, internet: true,
 	desktopExport: true, imageUploads: true, fileUploads: true, reflection: true,
-	limits: { minutes: null, turns: null, tokens: null, cost: null },
+	limits: { minutes: null, turns: null, tokens: null, cost: null, tutoringTurns: null },
 	accessibility: { dictation: true, cloudDictation: true, readAloud: false, simplifiedVocabulary: false, readableFormatting: false },
 };
 
@@ -50,8 +50,9 @@ export function parseCapabilityPolicy(value: unknown): CapabilityPolicy {
 		policy.accessibility[key] = accessibility[key];
 	}
 	const limits = raw.limits as Record<string, unknown> | undefined;
-	for (const key of ["minutes", "turns", "tokens", "cost"] as const) {
-		const limit = limits?.[key];
+	for (const key of ["minutes", "turns", "tokens", "cost", "tutoringTurns"] as const) {
+		// tutoringTurns is optional so policies saved before it existed stay valid.
+		const limit = key === "tutoringTurns" ? limits?.[key] ?? null : limits?.[key];
 		if (limit !== null && (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0 || limit > 1e9 || (key !== "cost" && !Number.isInteger(limit)))) throw new Error(`Invalid ${key} limit. Leave blank for unlimited.`);
 		policy.limits[key] = limit as number | null;
 	}

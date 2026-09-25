@@ -84,14 +84,16 @@ describe("effective student capabilities", () => {
 			chat: { allowed: true }, agentFileEditing: { allowed: true }, autocomplete: { allowed: true },
 			terminal: { allowed: true, inspectionOnly: false }, internet: { allowed: true }, dependencyInstallation: { allowed: true },
 			learn: { allowed: true }, models: ["openai/small"], reasoningLevels: ["low", "medium"],
-			budget: { remaining: { turns: null, tokens: null, cost: null, minutes: null } } });
+			architecture: { allowed: true },
+			budget: { overall: { status: "available" }, agent: { status: "available" }, tutoring: { status: "available" },
+				session: { remaining: { turns: null, tokens: null, cost: null, minutes: null, tutoringTurns: null } } } });
 		expect(() => createStudentWorkspace(context, { capabilities, model: "openai/large" })).toThrow("not available");
 		expect(createStudentWorkspace(context, { capabilities, model: "openai/small" }).model).toBe("openai/small");
 	});
 
 	it("propagates organization restrictions", async () => {
 		const restricted = resolveStudentCapabilities(await managedContext({ fileEditing: false, dependencyInstallation: true, internet: false }));
-		expect(restricted.agentFileEditing).toEqual({ allowed: false, reason: "File editing is disabled for this project." });
+		expect(restricted.agentFileEditing).toEqual({ allowed: false, reason: "File editing is disabled for this project.", code: "agent_editing_disabled" });
 		expect(restricted.autocomplete.allowed).toBe(false);
 		expect(restricted.terminal).toMatchObject({ allowed: true, inspectionOnly: true });
 		expect(restricted.dependencyInstallation.allowed).toBe(false);
@@ -106,17 +108,45 @@ describe("effective student capabilities", () => {
 		expect(unavailable.chat.reason).toContain("institution-approved");
 	});
 
-	it("reports remaining budget and blocks AI surfaces once exhausted", async () => {
-		const context = await managedContext({ limits: { minutes: null, turns: 3, tokens: 1000, cost: null } });
+	it("keeps tutoring after agent execution is exhausted, then stops at cost limits", async () => {
+		const context = await managedContext({ limits: { minutes: null, turns: 3, tokens: 1000, cost: null, tutoringTurns: 2 } });
 		const usage = new CapabilityState();
 		usage.select(context.policy);
 		usage.turns = 1; usage.tokens = 400;
-		expect(resolveStudentCapabilities(context, { usage }).budget.remaining).toMatchObject({ turns: 2, tokens: 600, cost: null });
+		expect(resolveStudentCapabilities(context, { usage }).budget.session.remaining).toMatchObject({ turns: 2, tokens: 600, cost: null, tutoringTurns: 2 });
+
+		// AI doing -> AI assisting: the agent stops, tutoring and autocomplete continue.
 		usage.turns = 3;
+		const tutoring = resolveStudentCapabilities(context, { usage });
+		expect(tutoring.budget).toMatchObject({ agent: { status: "exhausted", reason: expect.stringContaining("response limit") },
+			tutoring: { status: "available" }, autocomplete: { status: "available" }, architecture: { status: "available" }, overall: { status: "available" } });
+		expect(tutoring.agentFileEditing).toMatchObject({ allowed: false, code: "agent_budget_exhausted" });
+		expect(tutoring.terminal.code).toBe("agent_budget_exhausted");
+		for (const surface of [tutoring.chat, tutoring.learn, tutoring.autocomplete, tutoring.architecture]) expect(surface.allowed).toBe(true);
+
+		// AI assisting -> student doing: the tutoring reserve is used, autocomplete remains.
+		usage.tutoringTurns = 2;
+		const reserveUsed = resolveStudentCapabilities(context, { usage });
+		expect(reserveUsed.budget.tutoring).toMatchObject({ status: "exhausted", reason: expect.stringContaining("tutoring allowance") });
+		expect(reserveUsed.chat).toMatchObject({ allowed: false, code: "budget_exhausted" });
+		expect(reserveUsed.autocomplete.allowed).toBe(true);
+
+		// Cost limits stop all AI.
+		usage.tokens = 1000;
 		const exhausted = resolveStudentCapabilities(context, { usage });
-		expect(exhausted.budget.exhausted).toContain("response limit");
-		expect(exhausted.chat.allowed).toBe(false);
+		for (const lane of ["overall", "agent", "tutoring", "autocomplete", "architecture"] as const) expect(exhausted.budget[lane].status).toBe("exhausted");
 		expect(exhausted.autocomplete.allowed).toBe(false);
+	});
+
+	it("maps an organization agent-only budget block onto the agent lane", async () => {
+		const context = await managedContext();
+		const capabilities = resolveStudentCapabilities(context, { agentExhausted: "The AI implementation budget has been reached.", warning: "Usage is high." });
+		expect(capabilities.budget).toMatchObject({ agent: { status: "exhausted" }, tutoring: { status: "low" }, overall: { status: "low" } });
+		expect(capabilities.chat.allowed).toBe(true);
+		expect(capabilities.agentFileEditing.code).toBe("agent_budget_exhausted");
+		const blocked = resolveStudentCapabilities(context, { exhausted: "The AI budget has been reached." });
+		expect(blocked.chat.code).toBe("budget_exhausted");
+		expect(blocked.autocomplete.code).toBe("budget_exhausted");
 	});
 
 	it("personal projects still work", async () => {

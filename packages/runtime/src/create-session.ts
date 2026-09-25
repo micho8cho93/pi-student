@@ -54,6 +54,8 @@ import { createLearningSession, type LearningSession } from "@pi-student/educati
 import { capabilityState, guardCapabilitySession } from "@pi-student/policy/capability-runtime";
 import { createProjectCapabilitiesExtension } from "./project-capabilities.js";
 import { createWorkspaceActivity, type WorkspaceActivityEmitter } from "./workspace-activity.js";
+import { formatAssistanceFallback } from "./assistance.js";
+import { resolveStudentCapabilities } from "./student-workspace.js";
 import { modelAllowed, allowedReasoningLevels } from "@pi-student/policy/capability-policy";
 
 const SANDBOX_SYSTEM_PROMPT = `
@@ -116,7 +118,15 @@ export async function createLearningAgentRuntime(
 		workflow = restoreWorkflow(sessionManager, runtimeCwd);
 		if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(runtimeCwd);
 		const sandboxCwd = sandboxRuntime.getWorkspacePath();
-		const activity = createWorkspaceActivity(workflow, sandboxRuntime, { contextStore: options.services?.contextStore });
+		const activityWorkflow = workflow;
+		const activity = createWorkspaceActivity(workflow, sandboxRuntime, {
+			contextStore: options.services?.contextStore,
+			capabilities: async observed => {
+				const context = await options.services?.executionContext?.();
+				return context && resolveStudentCapabilities(context, { ...observed, usage: capabilityState(activityWorkflow),
+					stage: activityWorkflow.getStage(), sandbox: { running: sandboxRuntime.isRunning() } });
+			},
+		});
 		const services = await createAgentSessionServices({
 			cwd: sandboxCwd,
 			agentDir,
@@ -126,7 +136,8 @@ export async function createLearningAgentRuntime(
 				extensionFactories: [
 					createSandboxExtension(sandboxRuntime),
 					createLearningExtension(workflow, modelRuntime, sandboxRuntime, options.services, activity.emit),
-					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services, activity.emit),
+					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services, activity.emit,
+						async reason => formatAssistanceFallback(await activity.actions({ exhausted: reason }) ?? [], reason)),
 					createApprovedExtensions(options.services, () => workflow.getStage()),
 					activity.extension,
 				],
@@ -173,7 +184,7 @@ export async function createLearningAgentRuntime(
 			await refreshSessionModelInventory(modelRuntime, context);
 			if (!selected) throw new Error("Select an available model before continuing.");
 			await assertExecutionModel(modelRuntime, context, selected);
-		});
+		}, async reason => formatAssistanceFallback(await activity.actions() ?? [], reason));
 		const sessionWorkflow = workflow;
 		sessionWorkflow.onChange(() => {
 			sessionManager.appendCustomEntry("pi-student-workflow", structuredClone(sessionWorkflow.state));

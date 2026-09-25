@@ -14,3 +14,4 @@
 - [0012 — Provider-neutral sandbox profiles](0012-sandbox-profile-abstraction.md)
 - [0013 — Managed dataset artifacts](0013-managed-datasets.md)
 - [0014 — Organization extensions trust and permissions](0014-organization-extensions-trust.md)
+- [0015 — Educational AI budget lanes](0015-educational-budget-lanes.md)

@@ -6,3 +6,5 @@ export * from "./sandbox.js";
 export * from "./telemetry.js";
 export * from "./workspace.js";
 export * from "./workspace-events.js";
+export * from "./assistance.js";
+export * from "./budget.js";

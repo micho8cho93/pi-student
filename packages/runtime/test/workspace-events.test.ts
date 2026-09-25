@@ -8,8 +8,9 @@ import { createLearningSession } from "@pi-student/education/types";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
 import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
 import type { TeacherContext } from "@pi-student/telemetry/types";
-import { describeWorkspaceActivity, resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, summarizeTestFailure, WorkspaceEventJournal,
+import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, summarizeFailureOutput, WorkspaceEventJournal,
 	WorkspaceEventStream } from "../src/workspace-events.js";
+import { buildWorkspaceChatContext } from "../src/workspace-chat-context.js";
 import { createWorkspaceActivity } from "../src/workspace-activity.js";
 
 const roots: string[] = [];
@@ -80,14 +81,17 @@ describe("workspace event stream", () => {
 		stream.emit(scope, "editor", { type: "file.changed", file: "src/app.ts" });
 		stream.emit(scope, "chat", { type: "agent.files_changed", files: [{ file: "src/app.ts", kind: "modified" }, { file: "src/new.ts", kind: "created" }] });
 		stream.emit(scope, "editor", { type: "file.changed", file: "src/app.ts" });
+		stream.emit(scope, "editor", { type: "autocomplete.accepted", file: "src/new.ts" });
 		expect(stream.ui(scope).recentChanges.map(({ file, author, kind }) => ({ file, author, kind }))).toEqual([
 			{ file: "src/app.ts", author: "agent", kind: "modified" },
 			{ file: "src/new.ts", author: "agent", kind: "created" },
 			{ file: "src/app.ts", author: "student", kind: "modified" },
+			{ file: "src/new.ts", author: "autocomplete", kind: "modified" },
 		]);
-		const summary = describeWorkspaceActivity(stream.ui(scope))!;
-		expect(summary).toContain("The student edited these files themselves in the editor: src/app.ts.");
-		expect(summary).toContain("Files you (the assistant) changed: src/app.ts, src/new.ts.");
+		const summary = buildWorkspaceChatContext({ ui: stream.ui(scope) })!;
+		expect(summary).toContain("Student modified (typed themselves):\n- src/app.ts");
+		expect(summary).toContain("Student accepted AI autocomplete suggestions in:\n- src/new.ts");
+		expect(summary).toContain("You (the assistant) modified:\n- src/app.ts\n- src/new.ts");
 	});
 
 	it("marks the flowchart stale after relevant source changes, across processes", async () => {
@@ -116,7 +120,7 @@ describe("workspace event stream", () => {
 		await journal.flush();
 		await bridge.refresh(scope);
 		expect(bridge.ui(scope).flowchart).toMatchObject({ stale: true, staleFiles: ["src/agent.py"] });
-		expect(describeWorkspaceActivity(bridge.ui(scope))).toContain("flowchart is out of date (changed since it was generated: src/agent.py)");
+		expect(buildWorkspaceChatContext({ ui: bridge.ui(scope) })).toContain("Out of date: src/agent.py changed since it was generated");
 	});
 
 	it("keeps only metadata and omits sensitive files from model context", async () => {
@@ -134,12 +138,12 @@ describe("workspace event stream", () => {
 		const ui = stream.ui(scope);
 		expect(ui.recentChanges.map(change => change.file)).toEqual(["src/app.ts"]);
 		expect(ui.selectedCode).toBeUndefined();
-		const summary = describeWorkspaceActivity(ui)!;
+		const summary = buildWorkspaceChatContext({ ui, events: stream.events(scope) })!;
 		for (const hidden of [".env", "secrets.json", "credentials.json", "hunter2", "ghp_", "sk-live", "console.log"]) expect(summary).not.toContain(hidden);
 		expect(summary).toContain("AssertionError: expected 2 to be 3");
 		const stored = await readFile(path.join(journal.directory, `${event.workspace}.jsonl`), "utf8");
 		for (const hidden of ["sk-live", "hunter2", "ghp_"]) expect(stored).not.toContain(hidden);
-		expect(summarizeTestFailure("all good\nnothing to see")).toBeUndefined();
+		expect(summarizeFailureOutput("all good\nnothing to see")).toBeUndefined();
 	});
 });
 
@@ -181,7 +185,7 @@ describe("workspace activity in the chat session", () => {
 		expect(activity.stream.ui(scope).tests?.lastRun).toMatchObject({ command: "npm test", passed: false, exitCode: 1, summary: "FAIL test/math.test.ts > adds\nAssertionError: expected 3 to be 4" });
 		expect(activity.stream.ui(scope).recentChanges).toMatchObject([{ file: "src/existing.ts", author: "agent", kind: "modified" }]);
 		const prompt = await fire("before_agent_start", { systemPrompt: "base", prompt: "why did it fail?" });
-		expect(prompt.systemPrompt).toContain("Latest test run `npm test` failed (exit 1)");
+		expect(prompt.systemPrompt).toContain("- test/math.test.ts > adds failed (`npm test`, run by you, exit 1)");
 		expect(prompt.systemPrompt).not.toContain("ok line");
 		expect(activity.stream.events(scope).at(-1)).toMatchObject({ type: "chat.prompted", learnMode: false });
 	});

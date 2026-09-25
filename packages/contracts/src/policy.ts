@@ -15,7 +15,13 @@ export interface CapabilityPolicy {
 	imageUploads: boolean;
 	fileUploads: boolean;
 	reflection: boolean;
-	limits: { minutes: number | null; turns: number | null; tokens: number | null; cost: number | null };
+	/**
+	 * Per-session limits. minutes and turns are educational limits on agent
+	 * execution; tokens and cost are cost limits on all AI. tutoringTurns
+	 * reserves tool-free help after the agent limits are reached (null = no cap
+	 * beyond tokens/cost).
+	 */
+	limits: { minutes: number | null; turns: number | null; tokens: number | null; cost: number | null; tutoringTurns: number | null };
 	accessibility: { dictation: boolean; cloudDictation: boolean; readAloud: boolean; simplifiedVocabulary: boolean; readableFormatting: boolean };
 }
 

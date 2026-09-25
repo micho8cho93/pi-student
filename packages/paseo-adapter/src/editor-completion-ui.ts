@@ -92,6 +92,8 @@ export const editorCompletionUiScript = (port: number) => `
       }, 800);
     };
     report({ type: "file.opened" });
+    // Lets the flowchart highlight nodes that refer to this file.
+    window.dispatchEvent(new CustomEvent("pi-student:file-opened", { detail: { file: filename, workspaceId: initialWorkspace } }));
     let executedModel = null;
     const label = () => { toggle.textContent = settings.enabled ? "AI: " + (settings.model === "auto" ? (executedModel || "Auto") : (models.find(item => item.id === settings.model)?.label || settings.model).slice(0, 24)) : "Complete · AI off"; };
     label();

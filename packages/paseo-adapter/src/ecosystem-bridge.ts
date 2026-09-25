@@ -14,7 +14,7 @@ import { createModelRuntime } from "@pi-student/runtime/model-runtime";
 import { persistApiKey } from "@pi-student/runtime/auth-storage";
 import { DEFAULT_OLLAMA_URL, OLLAMA_PROVIDER_ID, readOllamaConfig, registerOllama, saveOllamaUrl } from "@pi-student/runtime/ollama";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { generateFlowchart } from "./flowchart.js";
+import { FlowchartModelError, generateFlowchart } from "./flowchart.js";
 import { CompletionError, EditorCompletionService, type CompletionRequest } from "./editor-completion.js";
 import { providerCatalog } from "@pi-student/shared/provider-catalog";
 import { mcpCatalog } from "@pi-student/shared/extension-catalog";
@@ -34,9 +34,13 @@ import { SupabaseExecutionScopeProvider } from "@pi-student/supabase-adapter/exe
 import { SupabaseInstitutionalEnvironmentProvider } from "@pi-student/supabase-adapter/institutional-environment";
 import { SandboxManager } from "@pi-student/sandbox/sandbox-manager";
 import { GondolinSandboxProvider } from "@pi-student/sandbox-gondolin/provider";
-import type { ExecutionContext } from "@pi-student/contracts";
+import type { ExecutionContext, ModelAdmissionGate } from "@pi-student/contracts";
 import { assertExecutionEnvironment, authorizeExtension } from "@pi-student/runtime/extension-authorization";
-import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, WorkspaceEventJournal, WorkspaceEventStream } from "@pi-student/runtime/workspace-events";
+import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, studentEventSurface, TEST_COMMAND, WorkspaceEventJournal, WorkspaceEventStream,
+	type WorkspaceEventScope } from "@pi-student/runtime/workspace-events";
+import { describeAssistanceFallback, resolveNextAvailableActions } from "@pi-student/runtime/assistance";
+import { resolveStudentCapabilities, unavailableStudentCapabilities, type StudentCapabilityInputs } from "@pi-student/runtime/student-workspace";
+import { describeWorkspaceBudget } from "@pi-student/runtime/workspace-budget";
 
 export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
@@ -73,6 +77,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 		return providerRuntime;
 	};
 	const completionSessionId = randomUUID();
+	const admissionSignals = new Map<string, Pick<StudentCapabilityInputs, "exhausted" | "agentExhausted" | "warning">>();
 	const resolveModelExecution = async (root: string) => {
 		const runtime = await getProviderRuntime();
 		const context = await readTeacherContext();
@@ -97,13 +102,27 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			? { ...resolvedContext, environment: { ...resolvedContext.environment, capabilities: localEnvironment.capabilities } }
 			: resolvedContext;
 		const admission = new SupabaseModelAdmissionProvider(client, (token, sessionId, thinking) => direct.refreshHostedToken(token, sessionId, thinking));
-		return { runtime, context: executionContext, beforeRequest: async (provider: string, modelId: string, thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => {
+		const beforeRequest: ModelAdmissionGate = async (provider, modelId, thinking, purpose) => {
 			if (!executionContext.projectId) return;
-			const decision = await admission.check(executionContext.projectId, provider, modelId, thinking, completionSessionId);
-			if (decision.blocked) throw new CompletionError("This model is blocked by the project approval or budget.", 403);
-		} };
+			const decision = await admission.check(executionContext.projectId, provider, modelId, thinking, completionSessionId, purpose);
+			// Remember the latest decision so workspace actions can show budget lanes without another check.
+			admissionSignals.set(root, decision.blocked ? { exhausted: "The AI budget or model approval blocks this request." }
+				: decision.agentBlocked ? { agentExhausted: "The AI implementation budget has been reached." }
+					: decision.warning ? { warning: "AI usage is approaching its limit." } : {});
+			if (decision.blocked) throw new CompletionError(purpose === "autocomplete" ? "AI completion is paused by the project's model approval or AI budget."
+				: "This model is blocked by the project approval or budget.", 403);
+		};
+		return { runtime, context: executionContext, beforeRequest };
 	};
 	const completions = new EditorCompletionService(resolveModelExecution);
+	/** Deterministic next actions for the GUI. Failing to resolve AI access never hides manual workflows. */
+	const workspaceActions = async (root: string, scope: WorkspaceEventScope, observed: Pick<StudentCapabilityInputs, "model"> = {}) => {
+		const capabilities = await resolveModelExecution(root)
+			.then(({ context }) => resolveStudentCapabilities(context, { ...admissionSignals.get(root), ...observed }))
+			.catch(error => unavailableStudentCapabilities(safeError(error), error instanceof CompletionError && error.status === 403 ? "budget_exhausted" : "provider_unavailable"));
+		const actions = resolveNextAvailableActions({ capabilities, ui: workspaceEvents.ui(scope) });
+		return { actions, fallback: describeAssistanceFallback(actions), budget: describeWorkspaceBudget(capabilities.budget) };
+	};
 	const requireApprovedProvider = async (providerId: string) => {
 		const approved = await approvedProvidersForCurrentProject();
 		if (approved && !approved.includes(providerId)) throw new Error("This model provider is not approved for the selected class project.");
@@ -140,9 +159,19 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			if (request.method === "POST" && url.pathname === "/workspace-events") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
 				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
-				const body = await readBody(request, 4_000);
-				try { workspaceEvents.emit(await eventScope(root), "editor", body as Record<string, unknown>, STUDENT_SURFACE_EVENTS); }
-				catch (error) { return json(response, 400, { error: safeError(error) }); }
+				const body = await readBody(request, 4_000) as Record<string, unknown>;
+				const source = studentEventSurface(body);
+				if (!source) return json(response, 400, { error: "Workspace event type is not supported." });
+				try {
+					const scope = await eventScope(root);
+					const event = workspaceEvents.emit(scope, source, body, STUDENT_SURFACE_EVENTS);
+					// Test outcomes are derived here from the student's command; the GUI cannot report them directly.
+					if (event.type === "terminal.command_finished" && TEST_COMMAND.test(event.command) && event.exitCode !== undefined) {
+						workspaceEvents.emit(scope, "terminal", event.exitCode === 0
+							? { type: "test.passed", command: event.command, exitCode: 0 }
+							: { type: "test.failed", command: event.command, exitCode: event.exitCode, ...(typeof body.summary === "string" ? { summary: body.summary } : {}) });
+					}
+				} catch (error) { return json(response, 400, { error: safeError(error) }); }
 				await eventJournal.flush();
 				return json(response, 202, { accepted: true });
 			}
@@ -152,6 +181,13 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				await workspaceEvents.refresh(scope);
 				const latest = workspaceEvents.events(scope).filter(event => event.type === "capability.changed").at(-1);
 				return json(response, 200, { ...workspaceEvents.ui(scope), capabilityChangedAt: latest?.at });
+			}
+			if (request.method === "GET" && url.pathname === "/workspace-actions") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
+				const scope = await eventScope(root);
+				await workspaceEvents.refresh(scope);
+				return json(response, 200, await workspaceActions(root, scope, url.searchParams.get("model") === "unavailable" ? { model: { available: false } } : {}));
 			}
 			if (["GET", "POST"].includes(request.method ?? "") && url.pathname === "/learn-mode") {
 				const workspaceId = url.searchParams.get("workspaceId");
@@ -190,7 +226,13 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 					flowchartJobs.set(activeProject, job);
 					void job.finally(() => { if (flowchartJobs.get(activeProject) === job) flowchartJobs.delete(activeProject); }).catch(() => {});
 				}
-				return json(response, 200, await job);
+				try { return json(response, 200, await job); }
+				catch (error) {
+					// Say what still works (an existing map, editing, terminal) instead of only reporting the failure.
+					const observed = error instanceof FlowchartModelError ? { model: { available: false } } : {};
+					const status = error instanceof CompletionError ? error.status : error instanceof FlowchartModelError ? 502 : 500;
+					return json(response, status, { error: safeError(error), ...await workspaceActions(activeProject, await eventScope(activeProject), observed) });
+				}
 			}
 			if (request.method === "GET" && url.pathname === "/providers") {
 				const runtime = await getProviderRuntime();

@@ -2,6 +2,7 @@ import { patchLearnControlsBundle } from "./learn-controls-patch.js";
 import { patchFileEditorBundle } from "./file-editor-patch.js";
 import { editorCompletionUiScript } from "./editor-completion-ui.js";
 import { flowchartUiScript } from "./flowchart-ui.js";
+import { terminalActivityUiScript } from "./terminal-activity-ui.js";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -847,12 +848,13 @@ export async function patchPaseoWebUi(paseoExecutable: string, ecosystemPort = 6
 	await patchLearnControlsBundle(indexPath);
 	await patchFileEditorBundle(indexPath);
 	const original = await readFile(indexPath, "utf8");
-	const script = studentUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort) + editorCompletionUiScript(ecosystemPort);
+	const script = studentUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort) + editorCompletionUiScript(ecosystemPort) + terminalActivityUiScript(ecosystemPort);
 	if (original.includes(script)) return false;
 	const html = original
 		.replace(/\s*<script data-pi-student-ui="[^"]*">[\s\S]*?<\/script>/g, "")
 		.replace(/\s*<script data-pi-student-flowchart="[^"]*">[\s\S]*?<\/script>/g, "")
-		.replace(/\s*<script data-pi-student-editor-completion="[^"]*">[\s\S]*?<\/script>/g, "");
+		.replace(/\s*<script data-pi-student-editor-completion="[^"]*">[\s\S]*?<\/script>/g, "")
+		.replace(/\s*<script data-pi-student-terminal-activity="[^"]*">[\s\S]*?<\/script>/g, "");
 	const insertionPoint = "</head>";
 	if (!html.includes(insertionPoint)) throw new Error(`Paseo web UI is missing its head element: ${indexPath}`);
 	await writeFile(indexPath, html.replace(insertionPoint, `${script}\n  ${insertionPoint}`));

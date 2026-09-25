@@ -19,8 +19,8 @@ function renderCapabilityEditor(project){
  root.append(node('label',{class:'label full'},['Approved models',models,node('span',{class:'muted'},project.approvedModels?'Select models, or leave all unselected to inherit the school model list.':'Leave blank for student choice. One ID selects a single model; multiple IDs create an approved list.')]));
  function fields(list,values,prefix){for(const [key,label,help] of list){const input=node('input',{id:prefix+key,type:'checkbox'});input.checked=values[key];root.append(node('label',{class:'label',style:'display:flex;flex-direction:row;align-items:flex-start;gap:10px'},[input,node('span',{},[label,node('small',{class:'muted',style:'display:block'},help)])]));}}
  fields(capabilityFields,settings,'cap-');
- root.append(node('h3',{class:'full'},'Session limits'),node('p',{class:'muted full'},'Optional limits per recorded session. Blank means unlimited. Token and cost limits stop after a response and can exceed the limit by that response. Cost uses provider-reported USD estimates.'));
- for(const [key,label] of [['minutes','Minutes'],['turns','Model responses'],['tokens','Tokens'],['cost','Cost (USD)']]){const input=node('input',{id:'cap-limit-'+key,type:'number',class:'field',min:key==='cost'?'0.01':'1',max:'1000000000',step:key==='cost'?'0.01':'1'});input.value=settings.limits[key]??'';root.append(node('label',{class:'label'},[label,input]));}
+ root.append(node('h3',{class:'full'},'Session limits'),node('p',{class:'muted full'},'Optional limits per recorded session. Blank means unlimited. Agent minutes and responses limit the AI doing the work; after them the AI switches to tutoring (explanations and hints, no file edits or commands) for the tutoring responses allowed. Token and cost limits stop all AI after a response and can exceed the limit by that response. Cost uses provider-reported USD estimates.'));
+ for(const [key,label] of [['minutes','Agent minutes'],['turns','Agent responses'],['tutoringTurns','Tutoring responses after agent limit'],['tokens','Tokens'],['cost','Cost (USD)']]){const input=node('input',{id:'cap-limit-'+key,type:'number',class:'field',min:key==='cost'?'0.01':'1',max:'1000000000',step:key==='cost'?'0.01':'1'});input.value=settings.limits[key]??'';root.append(node('label',{class:'label'},[label,input]));}
  root.append(node('h3',{class:'full'},'Accessibility'),node('p',{class:'muted full'},'These accommodations support reading and input. They do not change editing permissions or other academic restrictions.'));
  fields(accessibilityFields,settings.accessibility,'cap-access-');
  const cloud=el('cap-access-cloudDictation');const dictation=el('cap-access-dictation');const refresh=()=>{cloud.disabled=cloud.dataset.managed==='true'||!dictation.checked;};dictation.onchange=refresh;refresh();
@@ -33,7 +33,7 @@ function readCapabilityEditor(){
  if(settings.models.some(x=>! /^[^\\s/]+\\/[^\\s]+$/.test(x)))throw new Error('Enter approved models as provider/model IDs.');
  for(const [key] of capabilityFields)settings[key]=el('cap-'+key).checked;
  for(const [key] of accessibilityFields)settings.accessibility[key]=el('cap-access-'+key).checked;
- for(const key of Object.keys(settings.limits)){const raw=el('cap-limit-'+key).value;settings.limits[key]=raw===''?null:Number(raw);}
+ for(const key of ['minutes','turns','tutoringTurns','tokens','cost']){const raw=el('cap-limit-'+key).value;settings.limits[key]=raw===''?null:Number(raw);}
  return settings;
 }
 function restrictCapabilityEditor(paths){

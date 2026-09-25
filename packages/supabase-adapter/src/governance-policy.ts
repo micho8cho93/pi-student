@@ -17,7 +17,7 @@ function changedProjectSettings(settings: CapabilityPolicy): PolicyPatch {
 	}
 	if (settings.models.length) patch.models = settings.models;
 	if (JSON.stringify(settings.reasoningLevels) !== JSON.stringify(DEFAULT_CAPABILITY_POLICY.reasoningLevels)) patch.reasoningLevels = settings.reasoningLevels;
-	for (const key of ["minutes", "turns", "tokens", "cost"] as const) {
+	for (const key of ["minutes", "turns", "tokens", "cost", "tutoringTurns"] as const) {
 		if (settings.limits[key] !== DEFAULT_CAPABILITY_POLICY.limits[key]) (patch.limits ??= {})[key] = settings.limits[key];
 	}
 	for (const key of ["dictation", "cloudDictation", "readAloud", "simplifiedVocabulary", "readableFormatting"] as const) {

@@ -1,22 +1,27 @@
 import path from "node:path";
-import type { CapabilityAvailability, EffectiveStudentCapabilities, ExecutionContext, LearningStage, StudentWorkspaceContext,
-	WorkspaceBudgetState, WorkspaceScope, WorkspaceUiState } from "@pi-student/contracts";
+import type { BudgetLane, CapabilityAvailability, CapabilityRestriction, EffectiveStudentCapabilities, ExecutionContext, LearningStage, StudentWorkspaceContext,
+	WorkspaceScope, WorkspaceUiState } from "@pi-student/contracts";
 import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
-import type { CapabilityState } from "@pi-student/policy/capability-runtime";
 import { authorizeExtension, type ExtensionCatalogEntry } from "./extension-authorization.js";
+import { resolveWorkspaceBudget, type BudgetSignals } from "./workspace-budget.js";
 
-export interface StudentCapabilityInputs {
+export interface StudentCapabilityInputs extends BudgetSignals {
 	/** Output of availableExecutionModels, as provider/id. Omit when the model runtime is not consulted. */
 	models?: readonly string[];
-	/** Live session usage; limits are read from the policy in the context. */
-	usage?: Pick<CapabilityState, "limitReached" | "startedAt" | "turns" | "tokens" | "cost">;
 	stage?: LearningStage;
 	mcpCatalog?: readonly ExtensionCatalogEntry[];
-	now?: number;
+	/**
+	 * Observed state of the active model. available: false when the provider is
+	 * unreachable; toolUse: false when the model cannot reliably call tools.
+	 * Omitted fields mean "no evidence of a problem".
+	 */
+	model?: { available?: boolean; toolUse?: boolean };
+	/** Whether the agent sandbox is running. Omit when it has not been checked. */
+	sandbox?: { running: boolean };
 }
 
 const allowed: CapabilityAvailability = { allowed: true };
-const deny = (reason: string): CapabilityAvailability => ({ allowed: false, reason });
+const deny = (reason: string, code: CapabilityRestriction): CapabilityAvailability => ({ allowed: false, reason, code });
 
 /**
  * Projects ExecutionContext + policy onto student-facing surfaces. Mirrors the
@@ -25,54 +30,58 @@ const deny = (reason: string): CapabilityAvailability => ({ allowed: false, reas
  */
 export function resolveStudentCapabilities(context: ExecutionContext, inputs: StudentCapabilityInputs = {}): EffectiveStudentCapabilities {
 	const settings = context.policy?.settings ?? DEFAULT_CAPABILITY_POLICY;
-	const budget = resolveBudget(settings.limits, inputs);
+	const budget = resolveWorkspaceBudget(settings.limits, inputs);
 	const models = [...(inputs.models ?? settings.models)];
 
-	let chat = allowed;
-	if (context.classId && !context.projectId) chat = deny("Select a class project before continuing.");
-	else if (context.organizationId && !settings.models.length) chat = deny("No model is approved for this project.");
-	else if (inputs.models && !models.length) chat = deny(context.organizationId ? "No institution-approved model is available for this project." : "No configured model is available.");
-	else if (budget.exhausted) chat = deny(budget.exhausted);
-	const requiresChat = (enabled: boolean, reason: string) => !chat.allowed ? chat : enabled ? allowed : deny(reason);
+	// Access to any AI at all, before budget lanes are considered.
+	let ai = allowed;
+	if (context.classId && !context.projectId) ai = deny("Select a class project before continuing.", "project_not_selected");
+	else if (context.organizationId && !settings.models.length) ai = deny("No model is approved for this project.", "no_model");
+	else if (inputs.models && !models.length) ai = deny(context.organizationId ? "No institution-approved model is available for this project." : "No configured model is available.", "no_model");
+	else if (inputs.model?.available === false) ai = deny("The AI model is unavailable right now.", "provider_unavailable");
+	const within = (lane: BudgetLane): CapabilityAvailability => !ai.allowed ? ai
+		: lane.status === "exhausted" ? deny(lane.reason ?? "The AI budget has been reached.", "budget_exhausted") : allowed;
+	// Chat carries tutoring; it stays open after agent execution closes.
+	const chat = within(budget.tutoring);
+	const requiresChat = (enabled: boolean, reason: string, code: CapabilityRestriction) => !chat.allowed ? chat : enabled ? allowed : deny(reason, code);
 
-	const agentFileEditing = requiresChat(settings.fileEditing, "File editing is disabled for this project.");
-	const terminal = requiresChat(settings.terminal, "Terminal commands are disabled for this project.");
+	const toolUse = requiresChat(inputs.model?.toolUse !== false, "This model cannot reliably edit files or run commands.", "model_cannot_use_tools");
+	const sandbox = inputs.sandbox?.running === false ? deny("The agent's workspace is not running.", "sandbox_unavailable") : allowed;
+	const agentBudget = budget.agent.status === "exhausted" ? deny(budget.agent.reason ?? "The AI implementation budget has been reached.", "agent_budget_exhausted") : allowed;
+	// Agent actions need policy permission, agent budget, a tool-capable model, and a running sandbox, in that order.
+	const agentAction = (enabled: boolean, reason: string, code: CapabilityRestriction) => {
+		const permitted = requiresChat(enabled, reason, code);
+		return !permitted.allowed ? permitted : !agentBudget.allowed ? agentBudget : !sandbox.allowed ? sandbox : toolUse;
+	};
+	const agentFileEditing = agentAction(settings.fileEditing, "File editing is disabled for this project.", "agent_editing_disabled");
+	const terminal = agentAction(settings.terminal, "Terminal commands are disabled for this project.", "terminal_disabled");
 	const dependencyInstallation = !terminal.allowed ? terminal
-		: requiresChat(settings.fileEditing && settings.dependencyInstallation, "Dependency installation is disabled for this project.");
+		: agentAction(settings.fileEditing && settings.dependencyInstallation, "Dependency installation is disabled for this project.", "dependency_installation_disabled");
+	const autocomplete = !within(budget.autocomplete).allowed ? within(budget.autocomplete)
+		: settings.fileEditing ? allowed : deny("AI completion is disabled because file editing is disabled for this project.", "autocomplete_disabled");
 
 	const skills = (context.skills ?? []).filter(skill => authorizeExtension(context, skill, "skill", "list", inputs.stage).allowed).map(skill => skill.name);
 	const mcps = (context.mcps ?? []).filter(mcp => authorizeExtension(context, mcp, "mcp", "list", inputs.stage,
 		inputs.mcpCatalog?.find(item => item.endpoint === mcp.endpoint)).allowed).map(mcp => mcp.name);
-	const extensions = !chat.allowed ? chat : skills.length || mcps.length ? allowed : deny("No school tools are available for this project.");
+	const extensions = !chat.allowed ? chat : skills.length || mcps.length ? allowed : deny("No school tools are available for this project.", "no_extensions");
 
 	return {
 		projectId: context.projectId,
 		organizationId: context.organizationId,
 		chat,
+		toolUse,
+		sandbox,
 		agentFileEditing,
-		autocomplete: requiresChat(settings.fileEditing, "AI completion is disabled because file editing is disabled for this project."),
+		autocomplete,
+		architecture: within(budget.architecture),
 		terminal: { ...terminal, inspectionOnly: terminal.allowed && !dependencyInstallation.allowed },
-		internet: settings.internet && context.sandbox.internetAllowed !== false ? allowed : deny("Internet access is disabled for this project."),
+		internet: settings.internet && context.sandbox.internetAllowed !== false ? allowed : deny("Internet access is disabled for this project.", "internet_disabled"),
 		dependencyInstallation,
 		extensions: { ...extensions, skills, mcps },
 		learn: chat,
 		models,
 		reasoningLevels: [...settings.reasoningLevels],
 		budget,
-	};
-}
-
-function resolveBudget(limits: WorkspaceBudgetState["limits"], { usage, now = Date.now() }: StudentCapabilityInputs): WorkspaceBudgetState {
-	const left = (limit: number | null, used: number) => limit === null ? null : Math.max(0, limit - used);
-	return {
-		limits: { ...limits },
-		remaining: {
-			minutes: left(limits.minutes, usage ? (now - usage.startedAt) / 60_000 : 0),
-			turns: left(limits.turns, usage?.turns ?? 0),
-			tokens: left(limits.tokens, usage?.tokens ?? 0),
-			cost: left(limits.cost, usage?.cost ?? 0),
-		},
-		...(usage?.limitReached() ? { exhausted: usage.limitReached() } : {}),
 	};
 }
 
@@ -136,4 +145,19 @@ function normalizeUi(projectPath: string, ui: WorkspaceUiState): WorkspaceUiStat
 		...(ui.selectedCode ? { selectedCode: { ...ui.selectedCode, file: file(ui.selectedCode.file) } } : {}),
 		recentChanges: ui.recentChanges.map(change => ({ ...change, file: file(change.file) })),
 	});
+}
+
+/**
+ * Capabilities when project controls or the model runtime cannot be resolved at
+ * all. Every AI surface is denied; manual editing and the student's own terminal
+ * are not capabilities and stay usable.
+ */
+export function unavailableStudentCapabilities(reason: string, code: CapabilityRestriction = "provider_unavailable"): EffectiveStudentCapabilities {
+	const denied = deny(reason, code);
+	return {
+		chat: denied, toolUse: denied, sandbox: allowed, agentFileEditing: denied, autocomplete: denied, architecture: denied,
+		terminal: { ...denied, inspectionOnly: false }, internet: denied, dependencyInstallation: denied,
+		extensions: { ...denied, skills: [], mcps: [] }, learn: denied, models: [], reasoningLevels: [],
+		budget: resolveWorkspaceBudget(DEFAULT_CAPABILITY_POLICY.limits, code === "budget_exhausted" ? { exhausted: reason } : {}),
+	};
 }

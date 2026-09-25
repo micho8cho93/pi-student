@@ -18,6 +18,15 @@ describe("hierarchical effective policy", () => {
 		expect(resolved.settings.models).toEqual(["openai/advanced"]);
 		expect(resolved.provenance?.models.scope).toBe("class");
 	});
+	it("lets a teacher narrow a delegated tutoring reserve but not widen the agent limit", () => {
+		const resolved = resolveEffectivePolicy({ projectId: "p", delegatedPaths: ["limits.tutoringTurns"],
+			organization: { scope: "organization", version: 1, settings: { limits: { turns: 20, tutoringTurns: 10 } } },
+			class: { scope: "class", version: 1, settings: { limits: { tutoringTurns: 4 } } } });
+		expect(resolved.settings.limits).toMatchObject({ turns: 20, tutoringTurns: 4 });
+		expect(resolved.provenance?.["limits.tutoringTurns"]).toMatchObject({ scope: "class", reason: "capped" });
+		expect(() => resolveEffectivePolicy({ projectId: "p", delegatedPaths: ["limits.tutoringTurns"],
+			class: { scope: "class", version: 1, settings: { limits: { turns: 50 } } } })).toThrow(/cannot configure limits.turns/);
+	});
 	it("rejects undelegated teacher settings and empty model intersections", () => {
 		expect(() => resolveEffectivePolicy({ projectId: "p", delegatedPaths: [], class: { scope: "class", version: 1, settings: { internet: false } } })).toThrow(/cannot configure internet/);
 		expect(() => resolveEffectivePolicy({ projectId: "p", delegatedPaths, organization: { scope: "organization", version: 1, settings: { models: ["a/one"] } },

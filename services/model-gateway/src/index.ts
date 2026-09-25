@@ -85,12 +85,17 @@ export function createModelGateway(options: GatewayOptions) {
       const outputBound = Number(requestedOutput);
       const thinking = request.headers["x-pi-thinking-level"];
       const thinkingLevel = typeof thinking === "string" ? thinking : "off";
+      // Purpose is derived from the request shape, not claimed by the client: only
+      // tool-free requests may draw on a budget's tutoring reserve.
+      const agentRequest = [body.tools, body.functions].some(value => Array.isArray(value) && value.length > 0);
       const reserved = await options.db.rpc("gateway_reserve_model_request", { user_id_input: verified.data.user.id,
         project_id_input: match[1], profile_id_input: profileId, thinking_level_input: thinkingLevel,
-        input_bound_input: INPUT_BOUND, output_bound_input: outputBound });
+        input_bound_input: INPUT_BOUND, output_bound_input: outputBound, agent_request_input: agentRequest });
       if (reserved.error) return respond(response, 403, { error: { message: "Institution model access denied." } });
       const decision = reserved.data as { allowed: boolean; warning: boolean; action?: string; reservationId?: string; provider?: string; providerModel?: string };
-      if (!decision.allowed) return respond(response, 429, { error: { message: "The institution model budget or token limit has been reached.", action: decision.action } });
+      if (!decision.allowed) return respond(response, 429, { error: { message: decision.action === "assistance_only"
+        ? "The AI implementation budget has been reached. Tutoring without tools is still available."
+        : "The institution model budget or token limit has been reached.", action: decision.action } });
       if (!decision.reservationId || !decision.provider || !decision.providerModel) throw new Error("Invalid reservation response.");
       const upstream = options.providers[decision.provider];
       if (!upstream) return respond(response, 503, { error: { message: "Institution model provider is unavailable." } });

@@ -1,20 +1,28 @@
 import path from "node:path";
 import { isToolCallEventType, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { WorkspaceEventInput, WorkspaceSurface } from "@pi-student/contracts";
+import type { EffectiveStudentCapabilities, NextAvailableAction, WorkspaceEventInput, WorkspaceSurface } from "@pi-student/contracts";
 import type { WorkflowController } from "@pi-student/education/workflow-controller";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import { FileTeacherContextStore, type TeacherContextStore } from "@pi-student/telemetry/local-store";
-import { describeWorkspaceActivity, resolveWorkspaceEventScope, TEST_COMMAND, WorkspaceEventJournal, WorkspaceEventStream,
+import { formatAssistanceFallback, resolveNextAvailableActions } from "./assistance.js";
+import type { StudentCapabilityInputs } from "./student-workspace.js";
+import { buildWorkspaceChatContext } from "./workspace-chat-context.js";
+import { resolveWorkspaceEventScope, TEST_COMMAND, WorkspaceEventJournal, WorkspaceEventStream,
 	workspaceEventKey, type WorkspaceEventScope } from "./workspace-events.js";
 
 export type WorkspaceActivityEmitter = (source: WorkspaceSurface, event: WorkspaceEventInput) => void;
+
+/** Resolves current capabilities, given what the session has observed about the model. */
+export type WorkspaceCapabilityResolver = (observed: Pick<StudentCapabilityInputs, "model" | "exhausted">) => Promise<EffectiveStudentCapabilities | undefined>;
 
 export interface WorkspaceActivity {
 	extension: ExtensionFactory;
 	emit: WorkspaceActivityEmitter;
 	stream: WorkspaceEventStream;
 	scope(): WorkspaceEventScope | undefined;
+	/** Deterministic next actions for the current workspace, or undefined when capabilities are unknown. */
+	actions(observed?: Pick<StudentCapabilityInputs, "model" | "exhausted">): Promise<NextAvailableAction[] | undefined>;
 }
 
 /**
@@ -24,13 +32,14 @@ export interface WorkspaceActivity {
  * contents, prompts, or full command output.
  */
 export function createWorkspaceActivity(workflow: WorkflowController, sandbox: SandboxRuntime,
-	options: { stream?: WorkspaceEventStream; contextStore?: TeacherContextStore } = {}): WorkspaceActivity {
+	options: { stream?: WorkspaceEventStream; contextStore?: TeacherContextStore; capabilities?: WorkspaceCapabilityResolver } = {}): WorkspaceActivity {
 	const stream = options.stream ?? new WorkspaceEventStream({ journal: new WorkspaceEventJournal() });
 	const contextStore = options.contextStore ?? new FileTeacherContextStore();
 	let scope: WorkspaceEventScope | undefined;
 	let capabilities: Record<string, string> | undefined;
 	let learnMode = workflow.state.learnMode === true;
 	let exhausted: string | undefined;
+	let agentExhausted: string | undefined;
 	const emit: WorkspaceActivityEmitter = (source, event) => {
 		if (!scope) return;
 		try { stream.emit(scope, source, event); } catch { /* Activity is best-effort metadata. */ }
@@ -47,6 +56,10 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		const changed = moved ? ["project"] : capabilities ? Object.keys(current).filter(key => current[key] !== capabilities![key]) : [];
 		capabilities = current;
 		if (changed.length) emit("runtime", { type: "capability.changed", changed });
+	};
+	const actions = async (observed: Pick<StudentCapabilityInputs, "model" | "exhausted"> = {}) => {
+		const capabilities = await options.capabilities?.(observed).catch(() => undefined);
+		return capabilities && resolveNextAvailableActions({ capabilities, ui: scope ? stream.ui(scope) : { openFiles: [], recentChanges: [] } });
 	};
 	const relative = (file: unknown) => {
 		if (typeof file !== "string" || !scope) return undefined;
@@ -66,8 +79,9 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		pi.on("session_start", async () => { await bind(); });
 		pi.on("before_agent_start", async event => {
 			await bind();
+			// Build before recording this prompt, so "since the previous AI turn" ends here.
+			const summary = scope && buildWorkspaceChatContext({ ui: stream.ui(scope), events: stream.events(scope), actions: await actions() });
 			emit("chat", { type: "chat.prompted", learnMode });
-			const summary = scope && describeWorkspaceActivity(stream.ui(scope));
 			return summary ? { systemPrompt: `${event.systemPrompt}\n\n${summary}` } : undefined;
 		});
 		pi.on("model_select", async event => { emit("chat", { type: "model.changed", model: `${event.model.provider}/${event.model.id}` }); });
@@ -79,8 +93,9 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 				const command = event.input.command.trim();
 				const test = TEST_COMMAND.test(command);
 				pending.set(event.toolCallId, { command, existed: false, test });
-				emit("terminal", { type: "terminal.command_started", command });
-				if (test) emit("terminal", { type: "test.started", command });
+				// Agent commands come from the chat surface; the student's own terminal reports as "terminal".
+				emit("chat", { type: "terminal.command_started", command });
+				if (test) emit("chat", { type: "test.started", command });
 			}
 		});
 		pi.on("tool_result", async event => {
@@ -92,19 +107,34 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 				const output = event.content.filter(part => part.type === "text").map(part => part.text).join("\n");
 				const exitCode = event.isError ? Number(output.match(/Command exited with code (\d+)/)?.[1] ?? NaN) : 0;
 				const code = Number.isSafeInteger(exitCode) ? { exitCode } : {};
-				emit("terminal", { type: "terminal.command_finished", command: call.command, ...code });
-				if (call.test) emit("terminal", event.isError
+				emit("chat", { type: "terminal.command_finished", command: call.command, ...code, ...(event.isError ? { summary: output.slice(-20_000) } : {}) });
+				if (call.test) emit("chat", event.isError
 					? { type: "test.failed", command: call.command, ...code, summary: output.slice(-20_000) }
 					: { type: "test.passed", command: call.command, ...code });
 			}
 		});
-		pi.on("message_end", async event => {
+		pi.on("message_end", async (event, ctx) => {
 			if (event.message.role !== "assistant") return;
-			const reached = capabilityState(workflow).limitReached();
-			if (reached && reached !== exhausted) emit("runtime", { type: "budget.exhausted", reason: reached });
+			const state = capabilityState(workflow);
+			const reached = state.limitReached();
+			const agentReached = state.agentLimitReached();
+			const notify = async (observed: Pick<StudentCapabilityInputs, "model" | "exhausted">, cause: string) => {
+				const message = formatAssistanceFallback(await actions(observed) ?? [], cause);
+				if (message) ctx?.ui?.notify(message, "warning");
+			};
+			if (reached && reached !== exhausted) {
+				emit("runtime", { type: "budget.exhausted", reason: reached });
+				await notify({}, reached);
+			} else if (!reached && agentReached && agentReached !== agentExhausted) {
+				emit("runtime", { type: "budget.exhausted", reason: agentReached, lane: "agent" });
+			} else if ((event.message as { stopReason?: string }).stopReason === "error") {
+				// A provider failure ends AI help for now, not the student's work.
+				await notify({ model: { available: false } }, "");
+			}
 			exhausted = reached;
+			agentExhausted = agentReached;
 		});
 		pi.on("session_shutdown", async () => { unsubscribe(); });
 	};
-	return { extension, emit, stream, scope: () => scope };
+	return { extension, emit, stream, scope: () => scope, actions };
 }

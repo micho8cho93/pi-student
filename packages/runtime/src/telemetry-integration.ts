@@ -46,7 +46,7 @@ export function telemetrySelection(context: TeacherContext): TeacherContext {
 }
 
 export function createTeacherTelemetryExtension(workflow: WorkflowController, sandbox: SandboxRuntime, services: StudentRuntimeServices = {},
-	emitActivity?: WorkspaceActivityEmitter): ExtensionFactory {
+	emitActivity?: WorkspaceActivityEmitter, explainExhausted?: (reason: string) => Promise<string | undefined>): ExtensionFactory {
 	return (pi) => {
 		const controls = capabilityState(workflow);
 		const bus = new LearningEventBus();
@@ -127,14 +127,22 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
             if(activeContext.classId&&services.telemetrySink){const categories=chatSafetyCategories(_event.text);if(categories.length){try{await services.telemetrySink.record({type:"safety-signal",classId:activeContext.classId,categories});}catch{ctx.ui.setStatus("pi-safety-sync","Safety signal could not sync.");}}}
 			if (!activeContext.organizationId || !activeContext.projectId || !services.modelAdmission || !ctx.model) return;
 			try {
-				const decision = await services.modelAdmission.check(activeContext.projectId, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), recorder.getRecord()?.session.id);
+				// Chat is admitted as tutoring; an agent-only block switches the session to tutoring mode.
+				const decision = await services.modelAdmission.check(activeContext.projectId, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), recorder.getRecord()?.session.id, "tutoring");
+				const agentReason = !decision.blocked && decision.agentBlocked ? "The organization's AI implementation budget has been reached. AI tutoring is still available." : undefined;
+				if (agentReason && !controls.agentBlocked) {
+					ctx.ui.notify(agentReason, "warning");
+					emitActivity?.("runtime", { type: "budget.exhausted", reason: agentReason, lane: "agent" });
+				}
+				controls.agentBlocked = agentReason;
 				if (decision.blocked) {
 					const reason = decision.action === "fallback" ? "The model budget is exhausted. Choose an approved fallback model." : "The organization AI budget or token limit has been reached.";
-					ctx.ui.notify(reason, "warning");
+					// A fallback model keeps AI help available; otherwise say what still works without AI.
+					ctx.ui.notify(decision.action === "fallback" ? reason : await explainExhausted?.(reason).catch(() => undefined) ?? reason, "warning");
 					emitActivity?.("runtime", { type: "budget.exhausted", reason });
 					return { action: "handled" as const };
 				}
-				if (decision.warning) {
+				if (decision.warning && !agentReason) {
 					ctx.ui.notify("Organization usage is approaching its monthly limit.", "warning");
 					emitActivity?.("runtime", { type: "budget.warning", reason: "Organization usage is approaching its monthly limit." });
 				}

@@ -11,3 +11,6 @@ export * from "./telemetry-integration.js";
 export * from "./student-workspace.js";
 export * from "./workspace-events.js";
 export * from "./workspace-activity.js";
+export * from "./workspace-chat-context.js";
+export * from "./assistance.js";
+export * from "./workspace-budget.js";

@@ -4,7 +4,8 @@ export const flowchartUiScript = (ecosystemPort: number) => `
   <script ${FLOWCHART_UI_MARKER}>
     (() => {
       const api = "http://127.0.0.1:${ecosystemPort}";
-      const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null, stale: false };
+      const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null, stale: false,
+        staleFiles: [], selected: null, activeFile: null, fallback: null, shapes: new Map() };
       const svgNs = "http://www.w3.org/2000/svg";
       const el = (tag, className, label) => {
         const node = document.createElement(tag);
@@ -16,6 +17,74 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         const node = document.createElementNS(svgNs, tag);
         Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
         return node;
+      };
+      const headers = { "Content-Type": "application/json", "X-Pi-Student": "ecosystem" };
+      const report = body => {
+        if (!state.workspaceId) return;
+        fetch(api + "/workspace-events?workspaceId=" + encodeURIComponent(state.workspaceId), { method: "POST", headers, body: JSON.stringify(body) }).catch(() => {});
+      };
+      const sameFile = (open, candidate) => Boolean(open && candidate) && (open === candidate || open.endsWith("/" + candidate));
+      const nodeFiles = node => [node.file, ...(node.relatedFiles || [])].filter(Boolean);
+      const relatesToOpenFile = node => nodeFiles(node).some(file => sameFile(state.activeFile, file));
+      const nodeIsStale = node => nodeFiles(node).some(file => state.staleFiles.includes(file));
+      const sourceLabel = node => node.file ? node.file + (node.line ? ":" + node.line : "") + (node.symbol ? " · " + node.symbol : "") : "";
+      // Paseo opens a workspace file from ?open=file:<base64url path>; it reads the parameter on navigation.
+      const openFile = file => {
+        if (!state.workspaceId || !file) return;
+        const encoded = btoa(unescape(encodeURIComponent(file))).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
+        const target = new URL(location.href);
+        target.searchParams.set("open", "file:" + encoded);
+        state.open = false; showPanel();
+        history.pushState(history.state, "", target.pathname + target.search + target.hash);
+        window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+        // If the router did not pick up the change, load the route directly.
+        setTimeout(() => { if (new URL(location.href).searchParams.get("open") === "file:" + encoded) location.assign(target.href); }, 1500);
+      };
+      const selectNode = node => {
+        state.selected = node ? node.id : null;
+        if (node) {
+          const { id, label, file, symbol, line, relatedFiles } = node;
+          report({ type: "flowchart.node_selected", id, label, ...(file ? { file } : {}), ...(symbol ? { symbol } : {}), ...(line ? { line } : {}), ...(relatedFiles?.length ? { relatedFiles } : {}) });
+        } else report({ type: "flowchart.node_cleared" });
+        applyHighlights();
+      };
+      const applyHighlights = () => {
+        const panel = root();
+        if (!panel || !state.graph) return;
+        state.graph.nodes.forEach(node => {
+          const entry = state.shapes.get(node.id);
+          if (!entry) return;
+          const selected = state.selected === node.id, related = relatesToOpenFile(node), stale = nodeIsStale(node);
+          entry.shape.setAttribute("stroke", selected ? "#ffffff" : entry.color.stroke);
+          entry.shape.setAttribute("stroke-width", selected ? 4 : related ? 3.5 : 2);
+          entry.shape.setAttribute("stroke-dasharray", stale ? "7 5" : "none");
+          entry.group.setAttribute("aria-pressed", String(selected));
+        });
+        const bar = panel.querySelector(".selection");
+        if (!bar) return;
+        bar.replaceChildren();
+        const node = state.graph.nodes.find(item => item.id === state.selected);
+        bar.hidden = !node;
+        if (!node) return;
+        bar.append(el("strong", "", node.label), el("span", "", node.file ? sourceLabel(node) : "Not linked to a specific file"));
+        if (nodeIsStale(node)) bar.append(el("span", "stale-note", "Code changed since this map was generated"));
+        if (node.file) {
+          const open = el("button", "", "Open code");
+          open.addEventListener("click", () => openFile(node.file));
+          bar.append(open);
+        }
+        const clear = el("button", "secondary", "Clear");
+        clear.addEventListener("click", () => selectNode(null));
+        bar.append(clear, el("span", "hint", "Chat can see the selected step."));
+      };
+      const fallbackList = () => {
+        if (!state.fallback?.canStill?.length) return null;
+        const box = el("div", "fallback");
+        box.append(el("span", "", "You can still:"));
+        const list = el("ul");
+        state.fallback.canStill.forEach(item => list.append(el("li", "", item)));
+        box.append(list);
+        return box;
       };
       const workspaceId = () => location.pathname.match(/\\/workspace\\/(wks_[A-Za-z0-9_-]+)/)?.[1] || null;
       const root = () => document.querySelector("#pi-student-flowchart");
@@ -36,6 +105,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         if (tab) tab.style.background = state.open ? "rgba(127,127,127,.18)" : "transparent";
       };
       const close = () => {
+        if (state.selected) selectNode(null);
         state.open = false;
         state.graph = null;
         state.error = "";
@@ -63,10 +133,12 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           content.appendChild(loading);
           return;
         }
-        if (state.error) {
+        if (state.error && !state.graph) {
           const error = el("div", "error");
           error.setAttribute("role", "alert");
           error.append(el("strong", "", "Flowchart unavailable"), el("span", "", state.error));
+          const fallback = fallbackList();
+          if (fallback) error.append(fallback);
           const retry = el("button", "secondary", "Try again");
           retry.addEventListener("click", generate);
           error.appendChild(retry);
@@ -84,11 +156,25 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#7d91a2" }));
         defs.appendChild(marker);
         diagram.appendChild(defs);
+        if (state.error) {
+          // A failed refresh keeps the existing map usable.
+          const banner = el("div", "refresh-error");
+          banner.setAttribute("role", "status");
+          banner.append(el("span", "", "Refresh failed: " + state.error + " Showing the previous flowchart."));
+          const fallback = fallbackList();
+          if (fallback) banner.append(fallback);
+          content.appendChild(banner);
+        }
         drawGraph(diagram, state.graph);
         canvas.appendChild(diagram);
         content.appendChild(canvas);
-        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + (state.graph.model ? " · Model " + state.graph.model : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString() + (state.stale ? " · Out of date: project files changed since then. Refresh to update." : ""));
+        const selection = el("div", "selection");
+        selection.hidden = true;
+        content.appendChild(selection);
+        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + (state.graph.model ? " · Model " + state.graph.model : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString() + (state.stale ? " · Out of date: project files changed since then. Refresh to update." : "")
+          + (state.activeFile && state.graph.nodes.some(relatesToOpenFile) ? " · " + state.graph.nodes.filter(relatesToOpenFile).length + " steps relate to " + state.activeFile : ""));
         content.appendChild(meta);
+        applyHighlights();
       };
       const wrap = (value, max = 26, maxLines = 3) => {
         const words = String(value || "").trim().split(/\\s+/).filter(Boolean);
@@ -113,6 +199,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
       };
       const drawGraph = (diagram, graph) => {
         const nodes = graph.nodes;
+        state.shapes = new Map();
         const depths = new Map(nodes.map(node => [node.id, 0]));
         for (let pass = 0; pass < nodes.length; pass++) {
           let changed = false;
@@ -217,7 +304,15 @@ export const flowchartUiScript = (ecosystemPort: number) => `
             group.appendChild(svgEl("rect", { x: position.x, y: position.y, width: nodeWidth, height: nodeHeight, rx: 14, fill: color.fill, stroke: color.stroke, "stroke-width": 2 }));
             if (type === "module") group.appendChild(svgEl("path", { d: "M " + (position.x + 11) + " " + (position.y + 2) + " V " + (position.y + nodeHeight - 2) + " M " + (position.x + nodeWidth - 11) + " " + (position.y + 2) + " V " + (position.y + nodeHeight - 2), stroke: color.stroke, "stroke-width": 1.5, opacity: ".7" }));
           }
-          const title = svgEl("title"); title.textContent = (node.detail ? node.label + ". " + node.detail : node.label) + " — " + type; group.appendChild(title);
+          state.shapes.set(node.id, { shape: group.firstChild, color, group });
+          group.dataset.nodeId = node.id;
+          group.setAttribute("role", "button");
+          group.setAttribute("tabindex", "0");
+          group.style.cursor = "pointer";
+          group.addEventListener("keydown", event => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (state.selected === node.id && node.file) openFile(node.file); else selectNode(node); }
+          });
+          const title = svgEl("title"); title.textContent = (node.detail ? node.label + ". " + node.detail : node.label) + " — " + type + (node.file ? " — " + sourceLabel(node) + ". Double-click to open the code." : ""); group.appendChild(title);
           const typeTag = svgEl("text", { x: position.x + nodeWidth / 2, y: position.y + 24, "text-anchor": "middle", "dominant-baseline": "middle", fill: color.text, "font-size": 10, "font-weight": 700, "letter-spacing": 1 });
           typeTag.textContent = type.toUpperCase(); group.appendChild(typeTag);
           const labelLines = wrap(node.label, type === "decision" ? 18 : 25, 2);
@@ -232,8 +327,11 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           lines.forEach((line, lineIndex) => { const text = svgEl("text", { x: box.x + box.w / 2, y: box.y + box.h / 2 + (lineIndex - (lines.length - 1) / 2) * 14, "text-anchor": "middle", "dominant-baseline": "middle", fill: "#e1edf1", "font-size": 11.5, "font-weight": 600 }); text.textContent = line; group.appendChild(text); });
           diagram.appendChild(group);
         });
-        let pointer = null;
-        diagram.addEventListener("pointerdown", event => { pointer = { x: event.clientX, y: event.clientY, box: { ...state.box } }; diagram.setPointerCapture(event.pointerId); });
+        let pointer = null, lastClick = null;
+        diagram.addEventListener("pointerdown", event => {
+          pointer = { x: event.clientX, y: event.clientY, box: { ...state.box }, nodeId: event.target.closest?.("[data-node-id]")?.dataset.nodeId };
+          diagram.setPointerCapture(event.pointerId);
+        });
         diagram.addEventListener("pointermove", event => {
           if (!pointer) return;
           const rect = diagram.getBoundingClientRect();
@@ -241,7 +339,18 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           state.box.y = pointer.box.y - (event.clientY - pointer.y) * pointer.box.h / rect.height;
           updateBox();
         });
-        diagram.addEventListener("pointerup", () => { pointer = null; });
+        diagram.addEventListener("pointerup", event => {
+          // A click without dragging selects a node; a second click on the same node opens its code.
+          if (pointer && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) < 5) {
+            const node = graph.nodes.find(item => item.id === pointer.nodeId);
+            const now = Date.now();
+            if (node && lastClick?.id === node.id && now - lastClick.at < 400 && node.file) openFile(node.file);
+            else if (node) selectNode(node);
+            else if (state.selected) selectNode(null);
+            lastClick = node ? { id: node.id, at: now } : null;
+          }
+          pointer = null;
+        });
         diagram.addEventListener("pointercancel", () => { pointer = null; });
         diagram.addEventListener("wheel", event => {
           event.preventDefault();
@@ -271,10 +380,13 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           const target = state.workspaceId ? "workspaceId=" + encodeURIComponent(state.workspaceId) : "projectName=" + encodeURIComponent(state.projectName);
           const response = await fetch(api + "/flowchart?" + target, { method: "POST", headers: { "Content-Type": "application/json", "X-Pi-Student": "ecosystem" }, body: "{}" });
           const graph = await response.json();
-          if (!response.ok) throw new Error(graph.error || "The flowchart could not be generated.");
+          if (!response.ok) { if (revision === state.revision) state.fallback = graph.fallback || null; throw new Error(graph.error || "The flowchart could not be generated."); }
           if (revision !== state.revision) return;
+          if (state.selected) selectNode(null);
           state.graph = graph;
           state.stale = false;
+          state.staleFiles = [];
+          state.fallback = null;
         } catch (error) { if (revision === state.revision) state.error = error.message; }
         finally { if (revision === state.revision) { state.loading = false; render(); } }
       };
@@ -283,14 +395,20 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         try {
           const response = await fetch(api + "/workspace-activity?workspaceId=" + encodeURIComponent(state.workspaceId));
           const activity = await response.json();
-          if (response.ok && Boolean(activity.flowchart?.stale) !== state.stale) { state.stale = Boolean(activity.flowchart?.stale); if (!state.loading) render(); }
+          if (!response.ok) return;
+          const staleFiles = activity.flowchart?.staleFiles || [];
+          if (Boolean(activity.flowchart?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|")) {
+            state.stale = Boolean(activity.flowchart?.stale);
+            state.staleFiles = staleFiles;
+            if (!state.loading) render();
+          }
         } catch { /* Staleness is advisory. */ }
       };
       const ensurePanel = () => {
         if (root()) return;
         const panel = el("section"); panel.id = "pi-student-flowchart";
         panel.setAttribute("aria-label", "Application flowchart");
-        panel.innerHTML = '<style>#pi-student-flowchart{position:fixed;z-index:9;box-sizing:border-box;display:none;flex-direction:column;background:#181b1a;color:#e9f0f2;border-top:1px solid #3e4748;font-size:14px}#pi-student-flowchart *{box-sizing:border-box}#pi-student-flowchart .head{display:flex;align-items:center;gap:16px;padding:17px 24px;border-bottom:1px solid #344044;flex-wrap:wrap}#pi-student-flowchart .heading{flex:1;min-width:230px}#pi-student-flowchart h2{font-size:20px;line-height:1.25;margin:0 0 4px}#pi-student-flowchart .flow-summary{color:#9db0b8;line-height:1.4}#pi-student-flowchart .badge{border:1px solid #567887;border-radius:99px;padding:4px 9px;color:#b7d5e1;font-size:12px}#pi-student-flowchart button{font:inherit;color:inherit;background:#26363b;border:1px solid #5a7179;border-radius:8px;padding:7px 11px;cursor:pointer}#pi-student-flowchart button:hover{background:#34505a}#pi-student-flowchart button:disabled{opacity:.5;cursor:default}#pi-student-flowchart button:focus-visible{outline:2px solid #86d2ec;outline-offset:2px}#pi-student-flowchart .zoom-controls{display:flex;gap:6px}#pi-student-flowchart .flow-content{display:flex;flex:1;min-height:0;flex-direction:column}#pi-student-flowchart .canvas{flex:1;min-height:0;overflow:hidden;background-color:#1c2427;background-image:radial-gradient(#3b515b 1px,transparent 1px);background-size:22px 22px;cursor:grab}#pi-student-flowchart .canvas:active{cursor:grabbing}#pi-student-flowchart .meta{padding:9px 24px;color:#8fa2aa;border-top:1px solid #344044;font-size:12px}#pi-student-flowchart .loading,#pi-student-flowchart .error{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:15px;text-align:center;padding:24px;color:#a9bdc4}#pi-student-flowchart .loading strong,#pi-student-flowchart .error strong{color:#edf5f6;font-size:20px}#pi-student-flowchart .spinner{width:54px;height:54px;border:4px solid #3a525c;border-top-color:#7bd3ef;border-radius:50%;animation:pi-flow-spin .85s linear infinite;box-shadow:0 0 28px #2e718855}@keyframes pi-flow-spin{to{transform:rotate(360deg)}}[data-pi-student-flowchart-tab]{display:inline-flex;align-items:center;gap:8px;flex:none;height:31px;max-width:180px;padding:0 9px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer}[data-pi-student-flowchart-tab].active{background:rgba(127,127,127,.18)}[data-pi-student-flowchart-tab] .close{font-size:16px;line-height:1;opacity:.6;padding:2px}[data-pi-student-flowchart-tab] .close:hover{opacity:1}</style><div class="head"><button type="button" class="back" hidden>← Back</button><div class="heading"><h2 class="flow-title">Application flowchart</h2><div class="flow-summary">See how the parts of this project fit together.</div></div><span class="badge">Read-only</span><div class="zoom-controls" hidden><button type="button" class="zoom-out" aria-label="Zoom out">−</button><button type="button" class="zoom-in" aria-label="Zoom in">+</button><button type="button" class="fit">Fit</button></div><button type="button" class="refresh">↻ Refresh</button></div><div class="flow-content"></div>';
+        panel.innerHTML = '<style>#pi-student-flowchart{position:fixed;z-index:9;box-sizing:border-box;display:none;flex-direction:column;background:#181b1a;color:#e9f0f2;border-top:1px solid #3e4748;font-size:14px}#pi-student-flowchart *{box-sizing:border-box}#pi-student-flowchart .head{display:flex;align-items:center;gap:16px;padding:17px 24px;border-bottom:1px solid #344044;flex-wrap:wrap}#pi-student-flowchart .heading{flex:1;min-width:230px}#pi-student-flowchart h2{font-size:20px;line-height:1.25;margin:0 0 4px}#pi-student-flowchart .flow-summary{color:#9db0b8;line-height:1.4}#pi-student-flowchart .badge{border:1px solid #567887;border-radius:99px;padding:4px 9px;color:#b7d5e1;font-size:12px}#pi-student-flowchart button{font:inherit;color:inherit;background:#26363b;border:1px solid #5a7179;border-radius:8px;padding:7px 11px;cursor:pointer}#pi-student-flowchart button:hover{background:#34505a}#pi-student-flowchart button:disabled{opacity:.5;cursor:default}#pi-student-flowchart button:focus-visible{outline:2px solid #86d2ec;outline-offset:2px}#pi-student-flowchart .zoom-controls{display:flex;gap:6px}#pi-student-flowchart .flow-content{display:flex;flex:1;min-height:0;flex-direction:column}#pi-student-flowchart .canvas{flex:1;min-height:0;overflow:hidden;background-color:#1c2427;background-image:radial-gradient(#3b515b 1px,transparent 1px);background-size:22px 22px;cursor:grab}#pi-student-flowchart .canvas:active{cursor:grabbing}#pi-student-flowchart .meta{padding:9px 24px;color:#8fa2aa;border-top:1px solid #344044;font-size:12px}#pi-student-flowchart .loading,#pi-student-flowchart .error{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:15px;text-align:center;padding:24px;color:#a9bdc4}#pi-student-flowchart .loading strong,#pi-student-flowchart .error strong{color:#edf5f6;font-size:20px}#pi-student-flowchart .spinner{width:54px;height:54px;border:4px solid #3a525c;border-top-color:#7bd3ef;border-radius:50%;animation:pi-flow-spin .85s linear infinite;box-shadow:0 0 28px #2e718855}@keyframes pi-flow-spin{to{transform:rotate(360deg)}}#pi-student-flowchart .selection{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 24px;border-top:1px solid #344044;background:#1f2a2e}#pi-student-flowchart .selection[hidden]{display:none}#pi-student-flowchart .selection span{color:#a9bdc4}#pi-student-flowchart .selection .hint{margin-left:auto;font-size:12px}#pi-student-flowchart .stale-note{color:#f4c15d!important}#pi-student-flowchart .refresh-error{padding:9px 24px;border-bottom:1px solid #6b4a2a;background:#3a2c1e;color:#ffe3a2}#pi-student-flowchart .fallback ul{margin:4px 0 0;padding-left:18px;text-align:left}[data-pi-student-flowchart-tab]{display:inline-flex;align-items:center;gap:8px;flex:none;height:31px;max-width:180px;padding:0 9px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;cursor:pointer}[data-pi-student-flowchart-tab].active{background:rgba(127,127,127,.18)}[data-pi-student-flowchart-tab] .close{font-size:16px;line-height:1;opacity:.6;padding:2px}[data-pi-student-flowchart-tab] .close:hover{opacity:1}</style><div class="head"><button type="button" class="back" hidden>← Back</button><div class="heading"><h2 class="flow-title">Application flowchart</h2><div class="flow-summary">See how the parts of this project fit together.</div></div><span class="badge">Read-only</span><div class="zoom-controls" hidden><button type="button" class="zoom-out" aria-label="Zoom out">−</button><button type="button" class="zoom-in" aria-label="Zoom in">+</button><button type="button" class="fit">Fit</button></div><button type="button" class="refresh">↻ Refresh</button></div><div class="flow-content"></div>';
         document.body.appendChild(panel);
         panel.querySelector(".back").addEventListener("click", close);
         panel.querySelector(".refresh").addEventListener("click", generate);
@@ -332,6 +450,9 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.open = true;
         state.graph = null;
         state.stale = false;
+        state.staleFiles = [];
+        state.selected = null;
+        state.fallback = null;
         ensurePanel();
         ensureTab();
         showPanel();
@@ -388,6 +509,13 @@ export const flowchartUiScript = (ecosystemPort: number) => `
       document.addEventListener("click", event => {
         if (event.target.closest?.('[data-testid^="workspace-tab-"]') && !event.target.closest('[data-pi-student-flowchart-tab]')) { state.open = false; showPanel(); }
       }, true);
+      // Opening code highlights the steps that refer to it; the map itself is never regenerated automatically.
+      window.addEventListener("pi-student:file-opened", event => {
+        if (!event.detail?.file || event.detail.workspaceId !== state.workspaceId) return;
+        state.activeFile = event.detail.file;
+        if (state.graph && !state.loading) { if (state.open) applyHighlights(); else render(); }
+      });
+      setInterval(() => { if (state.open && state.graph && !state.loading) void checkStale(); }, 20000);
       window.addEventListener("resize", showPanel);
       window.addEventListener("popstate", mount);
       const start = () => { ensurePanel(); mount(); new MutationObserver(mount).observe(document.body, { childList: true, subtree: true }); };

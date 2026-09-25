@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { ExecutionContext } from "@pi-student/contracts";
+import type { ExecutionContext, ModelAdmissionGate } from "@pi-student/contracts";
 import { allowedReasoningLevels } from "@pi-student/policy/capability-policy";
 import { availableExecutionModels } from "@pi-student/runtime/model-selection";
 import { isSensitiveContextPath } from "@pi-student/shared/file-context";
@@ -10,6 +10,8 @@ import { getInstallationPaths } from "@pi-student/shared/installation-paths";
 import { assertExecutionEnvironment } from "@pi-student/runtime/extension-authorization";
 
 const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|swift|cs|php|vue|astro|svelte|html|css|scss|sql|json|ya?ml|toml|sh)$/i;
+// Local abuse and performance protection (runaway editor loops, request storms).
+// Cost and educational limits come from model admission, not from these counters.
 const MAX_REQUESTS_PER_MINUTE = 10;
 const MAX_REQUESTS_PER_DAY = 100;
 
@@ -29,7 +31,7 @@ export interface CompletionModel { id: string; label: string }
 interface CompletionEnvironment {
 	runtime: ModelRuntime;
 	context: ExecutionContext;
-	beforeRequest?: (provider: string, modelId: string, thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => Promise<void>;
+	beforeRequest?: ModelAdmissionGate;
 }
 
 export class EditorCompletionService {
@@ -64,7 +66,7 @@ export class EditorCompletionService {
 		const thinking = context.policy ? allowedReasoningLevels(context.policy.settings, model)[0] : "off";
 		if (!thinking) throw new CompletionError("The completion model has no approved reasoning level.", 403);
 		if (signal?.aborted) throw new CompletionError("Completion cancelled.", 499);
-		await environment.beforeRequest?.(model.provider, model.id, thinking);
+		await environment.beforeRequest?.(model.provider, model.id, thinking, "autocomplete");
 		if (signal?.aborted) throw new CompletionError("Completion cancelled.", 499);
 		const remaining = await this.reserve(root);
 		const prefix = request.content.slice(Math.max(0, request.cursor - 6_000), request.cursor);

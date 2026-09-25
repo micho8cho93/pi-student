@@ -71,7 +71,7 @@ describe("student file completion", () => {
 			expect(result.suggestion).toBe("World");
 			expect(result.model).toBe("openai/small");
 			expect(completeSimple.mock.calls[0]![0]).toMatchObject({ provider: "openai", id: "small" });
-			expect(beforeRequest).toHaveBeenCalledWith("openai", "small", "off");
+			expect(beforeRequest).toHaveBeenCalledWith("openai", "small", "off", "autocomplete");
 			const prompt = completeSimple.mock.calls[0]![1].messages[0].content[0].text;
 			expect(prompt).not.toContain("nearbySymbol");
 			expect(prompt).not.toContain("DO_NOT_SEND");

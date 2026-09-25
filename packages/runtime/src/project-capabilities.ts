@@ -4,9 +4,12 @@ import type { CapabilityState } from "@pi-student/policy/capability-runtime";
 import type { SandboxRuntime } from "@pi-student/sandbox/types";
 import { isSafeInspectionCommand } from "./command-policy.js";
 
+const TUTORING_PROMPT = "Tutoring mode: the agent implementation budget for this session is used up. You have no tools. Help the student do the work themselves: explain concepts and errors, ask guiding questions, suggest the next small step, and point to the files or lines to look at. Do not write complete solutions for the student to paste.";
+
 export function createProjectCapabilitiesExtension(state: CapabilityState, sandbox: SandboxRuntime): ExtensionFactory {
 	return pi => {
 		let answer = "";
+		let toolsBeforeTutoring: string[] | undefined;
 		let speech: ChildProcess | undefined;
 		const stopSpeech = () => { speech?.kill(); speech = undefined; };
 		pi.registerCommand("read-aloud", {
@@ -28,8 +31,17 @@ export function createProjectCapabilitiesExtension(state: CapabilityState, sandb
 			stopSpeech(); answer = "";
 			const p = state.settings;
 			sandbox.setInternetAllowed?.(p.internet);
-			if (!state.effective) return;
-			return { systemPrompt: `${event.systemPrompt}\n\nProject capability settings: ${JSON.stringify(p)}. Respect disabled capabilities. ${!p.reflection ? "Do not ask for reflection; completion does not require reflection for this project." : ""} ${p.accessibility.simplifiedVocabulary ? "Use familiar words and explain technical terms." : ""} ${p.accessibility.readableFormatting ? "Use short paragraphs, clear spacing and short numbered steps for instructions." : ""}` };
+			// Tutoring mode sends no tools, so the request is tool-free end to end
+			// (the institution gateway admits only tool-free requests from a reserve).
+			const tutoring = state.tutoringOnly();
+			// Workflow refreshes may re-activate tools between turns, so clear them on every tutoring turn.
+			const active = tutoring ? pi.getActiveTools() : [];
+			if (active.length) { toolsBeforeTutoring = active; pi.setActiveTools([]); }
+			else if (!tutoring && toolsBeforeTutoring) { if (!pi.getActiveTools().length) pi.setActiveTools(toolsBeforeTutoring); toolsBeforeTutoring = undefined; }
+			if (!state.effective && !tutoring) return;
+			const tutor = tutoring ? `\n\n${TUTORING_PROMPT}` : "";
+			if (!state.effective) return { systemPrompt: `${event.systemPrompt}${tutor}` };
+			return { systemPrompt: `${event.systemPrompt}\n\nProject capability settings: ${JSON.stringify(p)}. Respect disabled capabilities. ${!p.reflection ? "Do not ask for reflection; completion does not require reflection for this project." : ""} ${p.accessibility.simplifiedVocabulary ? "Use familiar words and explain technical terms." : ""} ${p.accessibility.readableFormatting ? "Use short paragraphs, clear spacing and short numbered steps for instructions." : ""}${tutor}` };
 		});
 		pi.on("input", async (event, ctx) => {
 			const blocked = state.limitReached() || (!state.settings.imageUploads && (event.images?.length || /\[Image available at: /m.test(event.text)) ? "Image uploads are disabled for this project." : undefined);
@@ -46,6 +58,8 @@ export function createProjectCapabilitiesExtension(state: CapabilityState, sandb
 			const p = state.settings;
 			let reason = state.limitReached();
 			let capability = "sessionLimits";
+			const agentLimit = !reason && state.agentLimitReached();
+			if (agentLimit) { capability = "agentLimits"; reason = `${agentLimit} Guide the student instead of changing files or running commands.`; }
 			if (!reason && ["write", "edit"].includes(event.toolName) && !p.fileEditing) { capability = "fileEditing"; reason = "File editing is disabled for this project."; }
 			if (!reason && event.toolName === "save_to_desktop" && !p.desktopExport) { capability = "desktopExport"; reason = "Desktop export is disabled for this project."; }
 			if (!reason && event.toolName === "bash") {
@@ -62,9 +76,14 @@ export function createProjectCapabilitiesExtension(state: CapabilityState, sandb
 		pi.on("message_end", async (event, ctx) => {
 			if (event.message.role !== "assistant") return;
 			answer = event.message.content.filter(item => item.type === "text").map(item => item.text).join("\n");
-			state.turns++; state.tokens += event.message.usage.totalTokens || 0; state.cost += event.message.usage.cost?.total || 0;
+			const tutoring = state.agentLimitReached() !== undefined;
+			if (tutoring) state.tutoringTurns++; else state.turns++;
+			state.tokens += event.message.usage.totalTokens || 0; state.cost += event.message.usage.cost?.total || 0;
 			const reached = state.limitReached();
-			if (reached) { ctx.ui.notify(reached, "info"); await ctx.abort(); }
+			if (reached) { ctx.ui.notify(reached, "info"); await ctx.abort(); return; }
+			// Stop the agent loop when its limit is reached; the student can keep asking for help.
+			const agentReached = !tutoring && state.agentLimitReached();
+			if (agentReached) { ctx.ui.notify(`${agentReached} AI tutoring is still available.`, "info"); await ctx.abort(); }
 		});
 	};
 }

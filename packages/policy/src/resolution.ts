@@ -27,7 +27,7 @@ export interface PolicyResolutionInput {
 
 const booleanPaths = ["fileEditing", "terminal", "dependencyInstallation", "internet", "desktopExport", "imageUploads", "fileUploads", "reflection",
 	"accessibility.dictation", "accessibility.cloudDictation", "accessibility.readAloud", "accessibility.simplifiedVocabulary", "accessibility.readableFormatting"] as const;
-const limitPaths = ["limits.minutes", "limits.turns", "limits.tokens", "limits.cost"] as const;
+const limitPaths = ["limits.minutes", "limits.turns", "limits.tokens", "limits.cost", "limits.tutoringTurns"] as const;
 const arrayPaths = ["models", "reasoningLevels"] as const;
 const allPaths = [...booleanPaths, ...limitPaths, ...arrayPaths];
 

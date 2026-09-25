@@ -38,5 +38,7 @@ export interface ModelProvider {
 
 /** Optional host-side request admission. Implementations must fail closed for managed models. */
 export interface ModelAdmissionProvider {
-	check(projectId: string, provider: string, modelId: string, thinkingLevel: import("./policy.js").ThinkingLevel, sessionId?: string): Promise<{ warning: boolean; blocked: boolean; action?: "block_model" | "fallback" | "block_ai" }>;
+	/** purpose defaults to "agent", the most restrictive lane. */
+	check(projectId: string, provider: string, modelId: string, thinkingLevel: import("./policy.js").ThinkingLevel, sessionId?: string,
+		purpose?: import("./budget.js").BudgetPurpose): Promise<import("./budget.js").ModelAdmissionDecision>;
 }
