@@ -9,6 +9,9 @@ insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data) 
   ('b1000000-0000-0000-0000-000000000003','authenticated','authenticated','controls-student@example.test','{}','{}');
 insert into public.organizations (id,slug,name) values
   ('b2000000-0000-0000-0000-000000000001','teacher-controls-test','Controls School');
+insert into public.organization_memberships (organization_id,user_id,role) values
+  ('b2000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','owner'),
+  ('b2000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000002','teacher');
 insert into public.classes (id,teacher_id,organization_id,name,join_code) values
   ('b3000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b2000000-0000-0000-0000-000000000001','A','ABC-234'),
   ('b3000000-0000-0000-0000-000000000002','b1000000-0000-0000-0000-000000000002','b2000000-0000-0000-0000-000000000001','B','DEF-567');

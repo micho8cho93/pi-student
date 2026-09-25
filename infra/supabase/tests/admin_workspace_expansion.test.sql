@@ -8,7 +8,9 @@ insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) v
 ('c1000000-0000-0000-0000-000000000003','authenticated','authenticated','student@other.test','{}','{}'),
 ('c1000000-0000-0000-0000-000000000004','authenticated','authenticated','operator@platform.test','{}','{}');
 insert into public.organizations(id,slug,name) values('c2000000-0000-0000-0000-000000000001','expansion-test','Test');
-insert into public.organization_memberships(organization_id,user_id,role) values('c2000000-0000-0000-0000-000000000001','c1000000-0000-0000-0000-000000000002','admin');
+insert into public.organization_memberships(organization_id,user_id,role) values
+('c2000000-0000-0000-0000-000000000001','c1000000-0000-0000-0000-000000000001','owner'),
+('c2000000-0000-0000-0000-000000000001','c1000000-0000-0000-0000-000000000002','admin');
 insert into public.classes(id,teacher_id,organization_id,name) values('c3000000-0000-0000-0000-000000000001','c1000000-0000-0000-0000-000000000001','c2000000-0000-0000-0000-000000000001','Test class');
 insert into public.class_members(class_id,user_id,role,status) values('c3000000-0000-0000-0000-000000000001','c1000000-0000-0000-0000-000000000003','student','active');
 insert into public.platform_administrators(user_id) values('c1000000-0000-0000-0000-000000000004');

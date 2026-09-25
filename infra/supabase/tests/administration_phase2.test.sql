@@ -19,7 +19,8 @@ insert into public.organization_memberships (organization_id,user_id,role) value
  ('62000000-0000-0000-0000-000000000002','61000000-0000-0000-0000-000000000005','owner');
 insert into public.platform_administrators (user_id) values ('61000000-0000-0000-0000-000000000004');
 insert into public.classes (id,organization_id,teacher_id,name,join_code) values
- ('63000000-0000-0000-0000-000000000001','62000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000001','Class A','EEE-234');
+ ('63000000-0000-0000-0000-000000000001','62000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000001','Class A','EEE-234'),
+ ('63000000-0000-0000-0000-000000000002','62000000-0000-0000-0000-000000000002','61000000-0000-0000-0000-000000000005','Class B','EEE-235');
 insert into public.class_members (class_id,user_id,role,status) values
  ('63000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000003','student','active');
 insert into public.sessions (id,student_id,class_id,started_at,ended_at) values
@@ -58,14 +59,16 @@ end $$;
 select pass('organization admin cannot change platform status');
 do $$ begin
  begin
-  perform public.assign_organization_teacher('62000000-0000-0000-0000-000000000002',
-    '63000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000002',true);
+  perform public.set_class_teacher_assignments(
+    '63000000-0000-0000-0000-000000000002',
+    array['61000000-0000-0000-0000-000000000002']::uuid[]);
   raise exception 'cross-tenant teacher assignment succeeded';
  exception when insufficient_privilege then null; end;
 end $$;
 select pass('owner cannot assign teacher across organizations');
-select lives_ok($$ select public.assign_organization_teacher('62000000-0000-0000-0000-000000000001',
- '63000000-0000-0000-0000-000000000001','61000000-0000-0000-0000-000000000002',true) $$,'owner associates organization teacher');
+select lives_ok($$ select public.set_class_teacher_assignments(
+ '63000000-0000-0000-0000-000000000001',
+ array['61000000-0000-0000-0000-000000000002']::uuid[]) $$,'owner replaces organization teacher assignments');
 select results_eq($$ select count(*) from public.class_members where class_id='63000000-0000-0000-0000-000000000001' and user_id='61000000-0000-0000-0000-000000000002' and role='teacher' $$,$$ values (1::bigint) $$,'teacher assignment exists');
 select results_eq($$ select count(*) from public.administrative_audit_events where organization_id='62000000-0000-0000-0000-000000000001' and action='class.teacher_associated' and target_id='61000000-0000-0000-0000-000000000002' $$,$$ values (1::bigint) $$,'teacher association audited');
 select results_eq($$ select count(*) from public.administrative_audit_events where organization_id='62000000-0000-0000-0000-000000000001' and action='class.created' $$,$$ values (1::bigint) $$,'class creation audited');

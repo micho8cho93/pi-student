@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(28);
+select plan(30);
 
 insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) values
  ('71000000-0000-0000-0000-000000000001','authenticated','authenticated','governance-owner@example.test','{}','{}'),
@@ -51,6 +51,8 @@ select pass('teacher cannot change undelegated setting');
 select set_config('request.jwt.claim.sub','71000000-0000-0000-0000-000000000003',true);
 select results_eq($$ select count(*) from public.approved_model_profiles('74000000-0000-0000-0000-000000000001') $$,$$ values (1::bigint) $$,'student sees only approved profile');
 select is(public.governance_context('74000000-0000-0000-0000-000000000001')->>'organizationId','72000000-0000-0000-0000-000000000001','policy context has server-derived tenant');
+select is(public.governance_context('74000000-0000-0000-0000-000000000001')->>'classId','73000000-0000-0000-0000-000000000001','policy context binds the authoritative class');
+select throws_ok($$ select public.governance_context('74000000-0000-0000-0000-000000000002') $$,'42501','Managed project access required','cross-organization project context is denied');
 do $$ begin
  begin
   insert into public.usage_ledger(id,organization_id,class_id,user_id,session_id,model_profile_id,provider,provider_model)
