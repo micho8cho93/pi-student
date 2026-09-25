@@ -36,6 +36,7 @@ import { SandboxManager } from "@pi-student/sandbox/sandbox-manager";
 import { GondolinSandboxProvider } from "@pi-student/sandbox-gondolin/provider";
 import type { ExecutionContext } from "@pi-student/contracts";
 import { assertExecutionEnvironment, authorizeExtension } from "@pi-student/runtime/extension-authorization";
+import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, WorkspaceEventJournal, WorkspaceEventStream } from "@pi-student/runtime/workspace-events";
 
 export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
@@ -59,6 +60,10 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 	const github = new GhGitHubClient(undefined, progress => { signIn = progress; });
 	const activity = new Map<string, { progress?: PublishProgress; publishing: boolean }>();
 	const flowchartJobs = new Map<string, Promise<Awaited<ReturnType<typeof generateFlowchart>>>>();
+	// Shared with the chat runtime through the local journal; metadata only.
+	const eventJournal = new WorkspaceEventJournal();
+	const workspaceEvents = new WorkspaceEventStream({ journal: eventJournal });
+	const eventScope = async (root: string) => resolveWorkspaceEventScope(root, await readTeacherContext().catch(() => ({})));
 	let providerRuntime: ModelRuntime | undefined;
 	let codexLogin: { status: string; message?: string; url?: string; code?: string; prompt?: { type: string; message: string; options?: ReadonlyArray<{ id: string; label: string; description?: string }> }; answer?: (value: string) => void; error?: string } | undefined;
 	let supabaseLogin: { state: string; userId: string; startedAt: number } | undefined;
@@ -132,6 +137,22 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				response.once("close", () => controller.abort());
 				return json(response, 200, await completions.suggest(root, body, controller.signal));
 			}
+			if (request.method === "POST" && url.pathname === "/workspace-events") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
+				const body = await readBody(request, 4_000);
+				try { workspaceEvents.emit(await eventScope(root), "editor", body as Record<string, unknown>, STUDENT_SURFACE_EVENTS); }
+				catch (error) { return json(response, 400, { error: safeError(error) }); }
+				await eventJournal.flush();
+				return json(response, 202, { accepted: true });
+			}
+			if (request.method === "GET" && url.pathname === "/workspace-activity") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const scope = await eventScope(await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath));
+				await workspaceEvents.refresh(scope);
+				const latest = workspaceEvents.events(scope).filter(event => event.type === "capability.changed").at(-1);
+				return json(response, 200, { ...workspaceEvents.ui(scope), capabilityChangedAt: latest?.at });
+			}
 			if (["GET", "POST"].includes(request.method ?? "") && url.pathname === "/learn-mode") {
 				const workspaceId = url.searchParams.get("workspaceId");
 				const activeProject = await resolvePaseoWorkspacePath(paseoHome, workspaceId ?? undefined, projectPath);
@@ -160,7 +181,12 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				let job = flowchartJobs.get(activeProject);
 				if (!job) {
 					job = resolveModelExecution(activeProject).then(({ runtime, context, beforeRequest }) =>
-						generateFlowchart(activeProject, runtime, context, beforeRequest));
+						generateFlowchart(activeProject, runtime, context, beforeRequest)).then(async chart => {
+						const scope = await eventScope(activeProject);
+						await workspaceEvents.refresh(scope).catch(() => {});
+						workspaceEvents.emit(scope, "flowchart", { type: "flowchart.generated", filesRead: chart.filesRead, ...(chart.model ? { model: chart.model } : {}) });
+						return chart;
+					});
 					flowchartJobs.set(activeProject, job);
 					void job.finally(() => { if (flowchartJobs.get(activeProject) === job) flowchartJobs.delete(activeProject); }).catch(() => {});
 				}

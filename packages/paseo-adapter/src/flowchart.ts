@@ -6,15 +6,16 @@ import { isSensitiveContextPath } from "@pi-student/shared/file-context";
 import { selectExecutionModel } from "@pi-student/runtime/model-selection";
 import { assertExecutionEnvironment } from "@pi-student/runtime/extension-authorization";
 import { allowedReasoningLevels } from "@pi-student/policy/capability-policy";
+import { FLOWCHART_EXCLUDED_NAME, FLOWCHART_IGNORED_DIRECTORIES, FLOWCHART_IMPORTANT_NAME, FLOWCHART_SOURCE_EXTENSION } from "@pi-student/runtime/workspace-events";
 
 export type FlowchartNodeType = "start" | "end" | "decision" | "action" | "input" | "output" | "module" | "data";
 export interface FlowchartNode { id: string; label: string; detail?: string; type?: FlowchartNodeType }
 export interface FlowchartEdge { from: string; to: string; label?: string }
 export interface Flowchart { title: string; summary: string; nodes: FlowchartNode[]; edges: FlowchartEdge[]; generatedAt: string; filesRead: number; truncated: boolean; model?: string }
 
-const ignoredDirectories = new Set(["node_modules", ".git", ".next", ".turbo", "dist", "build", "coverage", "vendor", "venv", ".venv", "target", "__pycache__", ".cache"]);
-const sourceExtension = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|swift|cs|php|vue|astro|svelte|html|css|scss|sql|json|ya?ml|toml|sh)$/i;
-const importantName = /^(?:README(?:\.md)?|package\.json|pyproject\.toml|Cargo\.toml|go\.mod|requirements\.txt|Dockerfile|vite\.config\.[cm]?[jt]s|next\.config\.[cm]?[jt]s)$/i;
+const ignoredDirectories = FLOWCHART_IGNORED_DIRECTORIES;
+const sourceExtension = FLOWCHART_SOURCE_EXTENSION;
+const importantName = FLOWCHART_IMPORTANT_NAME;
 const MAX_FILES = 100;
 const MAX_FILE_CHARS = 7_000;
 const MAX_TOTAL_CHARS = 110_000;
@@ -27,7 +28,7 @@ export async function collectFlowchartSource(root: string): Promise<{ text: stri
 		try { entries = await readdir(directory, { withFileTypes: true }); }
 		catch { return; }
 		for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-			if (entry.name.startsWith(".") || isSensitiveContextPath(path.join(directory, entry.name)) || /(?:\.lock|lock\.json|\.min\.js|\.map|\.svg|\.snap)/i.test(entry.name)) continue;
+			if (entry.name.startsWith(".") || isSensitiveContextPath(path.join(directory, entry.name)) || FLOWCHART_EXCLUDED_NAME.test(entry.name)) continue;
 			const full = path.join(directory, entry.name);
 			if (entry.isDirectory()) {
 				if (!ignoredDirectories.has(entry.name)) await visit(full, depth + 1);

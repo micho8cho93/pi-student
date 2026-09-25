@@ -4,7 +4,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
   <script ${FLOWCHART_UI_MARKER}>
     (() => {
       const api = "http://127.0.0.1:${ecosystemPort}";
-      const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null };
+      const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null, stale: false };
       const svgNs = "http://www.w3.org/2000/svg";
       const el = (tag, className, label) => {
         const node = document.createElement(tag);
@@ -87,7 +87,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         drawGraph(diagram, state.graph);
         canvas.appendChild(diagram);
         content.appendChild(canvas);
-        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + (state.graph.model ? " · Model " + state.graph.model : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString());
+        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + (state.graph.model ? " · Model " + state.graph.model : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString() + (state.stale ? " · Out of date: project files changed since then. Refresh to update." : ""));
         content.appendChild(meta);
       };
       const wrap = (value, max = 26, maxLines = 3) => {
@@ -274,8 +274,17 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           if (!response.ok) throw new Error(graph.error || "The flowchart could not be generated.");
           if (revision !== state.revision) return;
           state.graph = graph;
+          state.stale = false;
         } catch (error) { if (revision === state.revision) state.error = error.message; }
         finally { if (revision === state.revision) { state.loading = false; render(); } }
+      };
+      const checkStale = async () => {
+        if (!state.workspaceId || !state.graph) return;
+        try {
+          const response = await fetch(api + "/workspace-activity?workspaceId=" + encodeURIComponent(state.workspaceId));
+          const activity = await response.json();
+          if (response.ok && Boolean(activity.flowchart?.stale) !== state.stale) { state.stale = Boolean(activity.flowchart?.stale); if (!state.loading) render(); }
+        } catch { /* Staleness is advisory. */ }
       };
       const ensurePanel = () => {
         if (root()) return;
@@ -309,7 +318,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           dismiss.addEventListener("click", event => { event.stopPropagation(); close(); });
           dismiss.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); close(); } });
           tab.appendChild(dismiss);
-          tab.addEventListener("click", () => { state.open = true; showPanel(); });
+          tab.addEventListener("click", () => { state.open = true; showPanel(); void checkStale(); });
           row.insertBefore(tab, plus.parentElement);
         }
       };
@@ -322,6 +331,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.projectName = null;
         state.open = true;
         state.graph = null;
+        state.stale = false;
         ensurePanel();
         ensureTab();
         showPanel();
@@ -337,6 +347,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.projectName = name;
         state.open = true;
         state.graph = null;
+        state.stale = false;
         ensurePanel();
         showPanel();
         generate();

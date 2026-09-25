@@ -5,3 +5,4 @@ export * from "./runtime.js";
 export * from "./sandbox.js";
 export * from "./telemetry.js";
 export * from "./workspace.js";
+export * from "./workspace-events.js";

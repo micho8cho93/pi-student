@@ -53,6 +53,7 @@ import {
 import { createLearningSession, type LearningSession } from "@pi-student/education/types";
 import { capabilityState, guardCapabilitySession } from "@pi-student/policy/capability-runtime";
 import { createProjectCapabilitiesExtension } from "./project-capabilities.js";
+import { createWorkspaceActivity, type WorkspaceActivityEmitter } from "./workspace-activity.js";
 import { modelAllowed, allowedReasoningLevels } from "@pi-student/policy/capability-policy";
 
 const SANDBOX_SYSTEM_PROMPT = `
@@ -115,6 +116,7 @@ export async function createLearningAgentRuntime(
 		workflow = restoreWorkflow(sessionManager, runtimeCwd);
 		if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(runtimeCwd);
 		const sandboxCwd = sandboxRuntime.getWorkspacePath();
+		const activity = createWorkspaceActivity(workflow, sandboxRuntime, { contextStore: options.services?.contextStore });
 		const services = await createAgentSessionServices({
 			cwd: sandboxCwd,
 			agentDir,
@@ -123,9 +125,10 @@ export async function createLearningAgentRuntime(
 				noSkills: true,
 				extensionFactories: [
 					createSandboxExtension(sandboxRuntime),
-					createLearningExtension(workflow, modelRuntime, sandboxRuntime, options.services),
-					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services),
+					createLearningExtension(workflow, modelRuntime, sandboxRuntime, options.services, activity.emit),
+					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services, activity.emit),
 					createApprovedExtensions(options.services, () => workflow.getStage()),
+					activity.extension,
 				],
 				extensionsOverride: removeLlamaCommand,
 				themesOverride: addBundledThemes,
@@ -202,10 +205,13 @@ export async function createLearningAgentRuntime(
 	};
 }
 
-function createLearningExtension(workflow: WorkflowController, modelRuntime: ModelRuntime, sandbox: SandboxRuntime, services?: StudentRuntimeServices): ExtensionFactory {
+function createLearningExtension(workflow: WorkflowController, modelRuntime: ModelRuntime, sandbox: SandboxRuntime, services?: StudentRuntimeServices,
+	emitActivity?: WorkspaceActivityEmitter): ExtensionFactory {
 	const questionLoop = new StudentQuestionLoop();
 	return (pi) => {
-		const exploration = registerLearnMode(pi, workflow, sandbox);
+		const exploration = registerLearnMode(pi, workflow, sandbox, undefined, {
+			onQuestionCompleted: question => emitActivity?.("question", { type: "question.completed", difficulty: question.difficulty, topic: question.topic }),
+		});
 		let fallbackAttempted = false;
 		let activeRoute: IntentRoute | undefined;
 		let activeProjectContext: ProjectContext | undefined;

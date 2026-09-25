@@ -9,3 +9,5 @@ export * from "./model-selection.js";
 export * from "./extension-authorization.js";
 export * from "./telemetry-integration.js";
 export * from "./student-workspace.js";
+export * from "./workspace-events.js";
+export * from "./workspace-activity.js";

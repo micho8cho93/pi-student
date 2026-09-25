@@ -51,6 +51,8 @@ export interface WorkspaceScope {
 export interface WorkspaceFileChange {
 	file: string;
 	kind: "created" | "modified" | "deleted";
+	/** Who made the change: the student in the editor, or the agent through its tools. */
+	author: "student" | "agent";
 	at: string;
 }
 
@@ -58,6 +60,8 @@ export interface WorkspaceTestResult {
 	command: string;
 	passed: boolean;
 	exitCode?: number;
+	/** Short redacted excerpt of failing lines; never the full output. */
+	summary?: string;
 	at: string;
 }
 
@@ -69,7 +73,8 @@ export interface WorkspaceUiState {
 	recentChanges: WorkspaceFileChange[];
 	terminal?: { lastCommand?: string; lastExitCode?: number };
 	tests?: { lastRun?: WorkspaceTestResult };
-	flowchart?: { generatedAt?: string; selectedNodeId?: string; stale: boolean };
+	/** staleFiles: source files changed since the flowchart was generated. */
+	flowchart?: { generatedAt?: string; selectedNodeId?: string; stale: boolean; staleFiles?: string[] };
 }
 
 /** What the student is currently doing in this project. */

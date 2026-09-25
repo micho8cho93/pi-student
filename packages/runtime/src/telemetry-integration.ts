@@ -16,8 +16,9 @@ import { SessionRecorder } from "@pi-student/telemetry/session-recorder";
 import { LearningRecordSyncService } from "@pi-student/telemetry/sync-service";
 import type { StudentReflection, TeacherContext } from "@pi-student/telemetry/types";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
+import type { WorkspaceActivityEmitter } from "./workspace-activity.js";
+import { TEST_COMMAND } from "./workspace-events.js";
 
-const TEST_COMMAND = /^(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+(?:test|build|lint))\b/i;
 
 export interface StudentRuntimeServices {
 	extensionEnvironment?: () => Promise<Pick<RuntimeConfiguration,"skills"|"mcps"|"sandbox"> | undefined>;
@@ -44,7 +45,8 @@ export function telemetrySelection(context: TeacherContext): TeacherContext {
 	return recorded;
 }
 
-export function createTeacherTelemetryExtension(workflow: WorkflowController, sandbox: SandboxRuntime, services: StudentRuntimeServices = {}): ExtensionFactory {
+export function createTeacherTelemetryExtension(workflow: WorkflowController, sandbox: SandboxRuntime, services: StudentRuntimeServices = {},
+	emitActivity?: WorkspaceActivityEmitter): ExtensionFactory {
 	return (pi) => {
 		const controls = capabilityState(workflow);
 		const bus = new LearningEventBus();
@@ -127,10 +129,15 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			try {
 				const decision = await services.modelAdmission.check(activeContext.projectId, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), recorder.getRecord()?.session.id);
 				if (decision.blocked) {
-					ctx.ui.notify(decision.action === "fallback" ? "The model budget is exhausted. Choose an approved fallback model." : "The organization AI budget or token limit has been reached.", "warning");
+					const reason = decision.action === "fallback" ? "The model budget is exhausted. Choose an approved fallback model." : "The organization AI budget or token limit has been reached.";
+					ctx.ui.notify(reason, "warning");
+					emitActivity?.("runtime", { type: "budget.exhausted", reason });
 					return { action: "handled" as const };
 				}
-				if (decision.warning) ctx.ui.notify("Organization usage is approaching its monthly limit.", "warning");
+				if (decision.warning) {
+					ctx.ui.notify("Organization usage is approaching its monthly limit.", "warning");
+					emitActivity?.("runtime", { type: "budget.warning", reason: "Organization usage is approaching its monthly limit." });
+				}
 			} catch {
 				ctx.ui.notify("Model authorization is unavailable. Reconnect before using organization AI.", "warning");
 				return { action: "handled" as const };

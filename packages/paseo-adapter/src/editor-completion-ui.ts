@@ -79,6 +79,19 @@ export const editorCompletionUiScript = (port: number) => `
     const oldPosition = host.style.position;
     host.style.position = "relative";
     host.append(toolbar);
+    // Metadata only: the bridge records which file changed, never its contents.
+    const report = event => { if (workspace() === initialWorkspace) request("/workspace-events", { method: "POST", body: JSON.stringify({ ...event, file: filename }) }).catch(() => {}); };
+    let changeTimer = null, selectionTimer = null;
+    const reportChange = () => { clearTimeout(changeTimer); changeTimer = setTimeout(() => report({ type: "file.changed" }), 1500); };
+    const reportSelection = () => {
+      clearTimeout(selectionTimer);
+      selectionTimer = setTimeout(() => {
+        const range = view.state.selection.main;
+        if (range.empty) return;
+        report({ type: "editor.selection_changed", startLine: view.state.doc.lineAt(range.from).number, endLine: view.state.doc.lineAt(range.to).number });
+      }, 800);
+    };
+    report({ type: "file.opened" });
     let executedModel = null;
     const label = () => { toggle.textContent = settings.enabled ? "AI: " + (settings.model === "auto" ? (executedModel || "Auto") : (models.find(item => item.id === settings.model)?.label || settings.model).slice(0, 24)) : "Complete · AI off"; };
     label();
@@ -127,7 +140,7 @@ export const editorCompletionUiScript = (port: number) => `
     };
     const accept = index => {
       const pos = view.state.selection.main.head;
-      if (ai) view.dispatch({ changes: { from: pos, insert: ai }, selection: { anchor: pos + ai.length } });
+      if (ai) { view.dispatch({ changes: { from: pos, insert: ai }, selection: { anchor: pos + ai.length } }); report({ type: "autocomplete.accepted" }); }
       else if (options[index]) {
         const before = view.state.sliceDoc(Math.max(0, pos - 80), pos);
         const prefix = before.match(/[A-Za-z_$][A-Za-z0-9_$]*$/)?.[0] || "";
@@ -183,19 +196,25 @@ export const editorCompletionUiScript = (port: number) => `
       if (!ai && options.length && ["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); selected = (selected + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length; show(options, null); return; }
       if (!ai && options.length && event.key === "Enter") { event.preventDefault(); accept(selected); }
     };
-    const onInput = () => setTimeout(schedule, 0);
+    const onInput = () => { reportChange(); setTimeout(schedule, 0); };
+    const onKeyUp = event => { if (event.shiftKey || event.key === "a") reportSelection(); };
     const onSelection = () => { if (popup && !view.hasFocus) clear(); };
     view.dom.addEventListener("keydown", onKeyDown, true);
     view.dom.addEventListener("input", onInput);
     view.dom.addEventListener("mouseup", schedule);
+    view.dom.addEventListener("mouseup", reportSelection);
+    view.dom.addEventListener("keyup", onKeyUp);
     view.dom.addEventListener("blur", onSelection, true);
     const onScroll = () => { if (popup) place(); };
     view.scrollDOM.addEventListener("scroll", onScroll);
     return () => {
-      clear(); toolbar.remove(); host.style.position = oldPosition;
+      clear(); clearTimeout(selectionTimer); toolbar.remove(); host.style.position = oldPosition;
+      if (changeTimer) { clearTimeout(changeTimer); report({ type: "file.changed" }); }
       view.dom.removeEventListener("keydown", onKeyDown, true);
       view.dom.removeEventListener("input", onInput);
       view.dom.removeEventListener("mouseup", schedule);
+      view.dom.removeEventListener("mouseup", reportSelection);
+      view.dom.removeEventListener("keyup", onKeyUp);
       view.dom.removeEventListener("blur", onSelection, true);
       view.scrollDOM.removeEventListener("scroll", onScroll);
     };

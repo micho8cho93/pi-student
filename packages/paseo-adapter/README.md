@@ -41,3 +41,16 @@ The editor hook is checked against the supported Paseo bundle at launch so an
 upstream editor change fails visibly instead of silently disabling completion.
 This is an app-shell restriction; it does not change Paseo's underlying generic
 workspace capabilities.
+
+Chat, the editor, and Flowchart share a local workspace event stream
+(`@pi-student/runtime/workspace-events`). The editor reports only metadata —
+which file was opened, edited, or selected, and when an AI suggestion was
+accepted — to the bridge's `/workspace-events` endpoint; it never sends file
+contents. The chat runtime records its own file edits, commands, and test
+results. Both processes share a bounded, per-workspace journal under the Pi
+Student config directory, keyed by project path and class project, so events
+never cross workspaces. Chat receives a short summary at each prompt (files
+the student changed vs. files the assistant changed, the latest test result
+with a few redacted failing lines, and whether the flowchart is out of date).
+Credential-like paths are excluded from that summary. The Flowchart tab shows
+when source files have changed since it was generated.

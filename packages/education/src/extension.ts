@@ -36,7 +36,8 @@ function prepareCodebaseModelArguments(args: unknown): { action: "overview" | "s
 	return { action, ...(target ? { target: target.trim() } : {}) };
 }
 
-export function registerLearnMode(pi: ExtensionAPI, workflow: WorkflowController, sandbox: SandboxRuntime, settings = new LearnSettingsStore()) {
+export function registerLearnMode(pi: ExtensionAPI, workflow: WorkflowController, sandbox: SandboxRuntime, settings = new LearnSettingsStore(),
+	hooks: { onQuestionCompleted?: (question: NonNullable<WorkflowController["state"]["question"]>) => void } = {}) {
 	const codebase = new CodebaseModel(sandbox);
 	let questionTurn: "generate" | "answer" | undefined;
 	let failed = false;
@@ -83,6 +84,7 @@ export function registerLearnMode(pi: ExtensionAPI, workflow: WorkflowController
 	});
 	pi.on("agent_settled", async () => {
 		if (questionTurn && !failed) {
+			if (questionTurn === "answer" && workflow.state.question) hooks.onQuestionCompleted?.(workflow.state.question);
 			workflow.setQuestion(questionTurn === "generate" && workflow.state.question ? { ...workflow.state.question, phase: "answer" } : undefined);
 			pi.setActiveTools([...workflow.getAllowedTools()]);
 		}
