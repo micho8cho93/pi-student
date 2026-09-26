@@ -5,7 +5,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
     (() => {
       const api = "http://127.0.0.1:${ecosystemPort}";
       const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null, stale: false,
-        staleFiles: [], selected: null, activeFile: null, fallback: null, learn: false, shapes: new Map(), checked: null, agent: null };
+        staleFiles: [], selected: null, activeFile: null, fallback: null, healthMessage: "", learn: false, shapes: new Map(), checked: null, agent: null };
       const svgNs = "http://www.w3.org/2000/svg";
       const el = (tag, className, label) => {
         const node = document.createElement(tag);
@@ -107,7 +107,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         if (visible) state.agent = visible;
         return state.agent;
       };
-      const target = () => state.workspaceId ? "workspaceId=" + encodeURIComponent(state.workspaceId) : "projectName=" + encodeURIComponent(state.projectName);
+      const target = () => state.workspaceId ? "workspaceId=" + encodeURIComponent(state.workspaceId) + (activeAgent() ? "&agentId=" + encodeURIComponent(activeAgent()) : "") : "projectName=" + encodeURIComponent(state.projectName);
       // Remembered per browser tab so a reload reopens the map the student was looking at. Convenience only.
       const remember = open => { try { if (state.workspaceId) sessionStorage.setItem("pi-student-map-open:" + state.workspaceId, open ? "1" : ""); } catch {} };
       const remembered = id => { try { return sessionStorage.getItem("pi-student-map-open:" + id) === "1"; } catch { return false; } };
@@ -164,6 +164,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         content.replaceChildren();
         panel.querySelector(".back").hidden = !state.projectName;
         panel.querySelector(".refresh").disabled = state.loading;
+        panel.querySelector(".refresh").textContent = state.healthMessage ? "Retry AI refresh" : "↻ Refresh";
         panel.querySelector(".zoom-controls").hidden = !state.graph;
         panel.querySelector(".flow-title").textContent = state.graph?.title || "Application flowchart";
         panel.querySelector(".flow-summary").textContent = state.graph?.summary || "See how the parts of this project fit together.";
@@ -198,6 +199,11 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#7d91a2" }));
         defs.appendChild(marker);
         diagram.appendChild(defs);
+        if (state.healthMessage && !state.error) {
+          const banner = el("div", "refresh-error", state.healthMessage + " The saved map remains available.");
+          const fallback = fallbackList(); if (fallback) banner.append(fallback);
+          content.appendChild(banner);
+        }
         if (state.error) {
           // A failed refresh keeps the existing map usable.
           const banner = el("div", "refresh-error");
@@ -428,6 +434,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           state.stale = false;
           state.staleFiles = [];
           state.fallback = null;
+          state.healthMessage = "";
           // Keep the selected step when the new map still has it; otherwise tell Chat it is gone.
           if (previous && !graph.nodes.some(node => node.id === previous)) selectNode(null);
         } catch (error) { if (revision === state.revision) state.error = error.message; }
@@ -437,13 +444,16 @@ export const flowchartUiScript = (ecosystemPort: number) => `
       const checkStale = async () => {
         if (!state.workspaceId || !state.graph) return;
         try {
-          const agent = activeAgent();
+          const agent = activeAgent(), revision = state.revision, workspace = state.workspaceId;
           const response = await fetch(api + "/workspace-snapshot?workspaceId=" + encodeURIComponent(state.workspaceId) + (agent ? "&agentId=" + encodeURIComponent(agent) : ""));
           const snapshot = await response.json();
-          if (!response.ok) return;
+          if (!response.ok || revision !== state.revision || workspace !== state.workspaceId || agent !== activeAgent()) return;
           const staleFiles = snapshot.map?.staleFiles || [];
           const learn = snapshot.learn?.flowchart?.detail === "educational";
-          if (Boolean(snapshot.map?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|") || learn !== state.learn) {
+          const healthMessage = snapshot.model?.available === false ? (snapshot.fallback?.headline || "AI is unavailable right now.") : "";
+          if (Boolean(snapshot.map?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|") || learn !== state.learn || healthMessage !== state.healthMessage) {
+            state.healthMessage = healthMessage;
+            state.fallback = snapshot.fallback || null;
             state.stale = Boolean(snapshot.map?.stale);
             state.staleFiles = staleFiles;
             state.learn = learn;
@@ -513,6 +523,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.staleFiles = [];
         state.selected = null;
         state.fallback = null;
+        state.healthMessage = "";
         remember(true);
         ensurePanel();
         ensureTab();

@@ -90,7 +90,7 @@ export async function startBrowserWorkspace(options: { policy?: EffectivePolicy 
 		}
 	}
 
-	const state = { outage: false };
+	const state = { outage: false, internalError: false };
 	const modelRequests: Array<{ systemPrompt: string; messages: unknown }> = [];
 	const model = { provider: "school", id: "tutor", name: "Tutor", reasoning: false, cost: { input: 0, output: 0 } };
 	// Configured on this machine but never approved by any policy used in these tests.
@@ -99,6 +99,7 @@ export async function startBrowserWorkspace(options: { policy?: EffectivePolicy 
 		getAvailable: async () => options.policy ? [rogue, model] : [model], getProviderAuthStatus: () => ({ configured: true }),
 		completeSimple: async (_model: unknown, request: { systemPrompt: string; messages: unknown }) => {
 			modelRequests.push(request);
+			if (state.internalError) return { stopReason: "error", errorMessage: "Extension internal error", content: [] };
 			if (state.outage) throw new Error("503 provider unavailable");
 			return { stopReason: "stop", content: [{ type: "text", text: JSON.stringify({ title: "Score flow", summary: "How points are awarded", nodes: [
 				{ id: "start", label: "Run the game", type: "start" },
@@ -147,9 +148,9 @@ export async function startBrowserWorkspace(options: { policy?: EffectivePolicy 
 		};
 		await fire("session_start");
 		/** One Chat turn: the context Pi Student adds for the model, then the assistant's reply. */
-		const turn = async (reply: { stopReason?: string } = {}) => {
+		const turn = async (reply: { stopReason?: string; errorMessage?: string } = {}) => {
 			const prompt = (await fire("before_agent_start", { systemPrompt: "BASE" }))?.systemPrompt ?? "BASE";
-			await fire("message_end", { message: { role: "assistant", content: [], usage: { totalTokens: 10, cost: { total: 0 } }, ...reply } });
+			await fire("message_end", { message: { role: "assistant", stopReason: "stop", content: [], usage: { totalTokens: 10, cost: { total: 0 } }, ...reply } });
 			await journal.flush();
 			return String(prompt).replace(/^BASE\n*/, "");
 		};
@@ -235,6 +236,7 @@ ${projectProgressUiScript(bridgePort)}${flowchartUiScript(bridgePort)}
 	return {
 		root, projects, paseoHome, shellOrigin, bridgeUrl, chat, snapshot, startBridge, modelRequests, journal, sessionFile,
 		outage: (value: boolean) => { state.outage = value; },
+		internalError: (value: boolean) => { state.internalError = value; },
 		async close() {
 			for (const item of chats.values()) await item.fire("session_shutdown");
 			await journal.flush();

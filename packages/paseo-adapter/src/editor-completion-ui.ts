@@ -25,10 +25,12 @@ export const editorCompletionUiScript = (port: number) => `
     catch { return { enabled: false, model: "auto", perMinute: 5 }; }
   };
   const save = value => localStorage.setItem(storageKey, JSON.stringify(value));
+  const activeAgent = () => [...document.querySelectorAll("[data-pi-student-agent-id]")].find(node => node.getClientRects().length > 0)?.getAttribute("data-pi-student-agent-id");
   const request = async (route, options = {}) => {
     const id = workspace();
     if (!id) throw new Error("Choose a workspace first.");
-    const response = await fetch(endpoint + route + "?workspaceId=" + encodeURIComponent(id), {
+    const agent = activeAgent();
+    const response = await fetch(endpoint + route + "?workspaceId=" + encodeURIComponent(id) + (agent ? "&agentId=" + encodeURIComponent(agent) : ""), {
       ...options, headers: { "Content-Type": "application/json", "X-Pi-Student": "ecosystem" }
     });
     const body = await response.json();
@@ -43,6 +45,7 @@ export const editorCompletionUiScript = (port: number) => `
     if (!host || !initialWorkspace) return;
     const settings = read();
     let models = [];
+    let aiPaused = false, healthMessage = "", disposed = false;
     let timer = null;
     let controller = null;
     let revision = 0;
@@ -96,7 +99,7 @@ export const editorCompletionUiScript = (port: number) => `
     report({ type: "file.opened" });
     // Lets the flowchart highlight nodes that refer to this file.
     window.dispatchEvent(new CustomEvent("pi-student:file-opened", { detail: { file: filename, workspaceId: initialWorkspace } }));
-    const label = () => { toggle.textContent = settings.enabled ? "AI suggestions on" : "AI suggestions off"; };
+    const label = () => { toggle.textContent = aiPaused ? "AI suggestions paused" : settings.enabled ? "AI suggestions on" : "AI suggestions off"; };
     label();
     const loadModels = async () => {
       try {
@@ -180,7 +183,7 @@ export const editorCompletionUiScript = (port: number) => `
       clear();
       if (workspace() !== initialWorkspace || !view.hasFocus) return;
       local(false);
-      if (!settings.enabled) return;
+      if (!settings.enabled || aiPaused) return;
       const state = view.state;
       if (!state.selection.main.empty) return;
       const pos = state.selection.main.head;
@@ -190,6 +193,29 @@ export const editorCompletionUiScript = (port: number) => `
       const current = revision, content = state.doc.toString();
       timer = setTimeout(() => { if (current === revision) void runAI(current, content, pos); }, 800);
     };
+    // A projection of the bound workspace snapshot; local completion and editing remain independent.
+    const retry = node("button", "Retry AI suggestions"); retry.type = "button"; retry.hidden = true;
+    panel.append(retry);
+    retry.onclick = () => { if (!settings.enabled) return; clear(); void runAI(revision, view.state.doc.toString(), view.state.selection.main.head); };
+    const checkHealth = async () => {
+      if (disposed || workspace() !== initialWorkspace) return;
+      try {
+        const agent = activeAgent();
+        const snapshot = await request("/workspace-snapshot");
+        if (disposed || workspace() !== initialWorkspace || agent !== activeAgent()) return;
+        const paused = snapshot.capabilities?.autocomplete?.allowed === false;
+        const message = paused ? (snapshot.capabilities.autocomplete.reason || "AI suggestions are unavailable.") : "";
+        if (paused !== aiPaused || message !== healthMessage) {
+          aiPaused = paused; healthMessage = message;
+          if (paused) { clear(); status.textContent = message + " You can still edit and use local completion."; }
+          else status.textContent = "";
+          label();
+        }
+        retry.hidden = !settings.enabled || snapshot.model?.available !== false;
+      } catch { /* A bridge outage must never disable manual editing. */ }
+    };
+    void checkHealth();
+    const healthTimer = setInterval(checkHealth, 2000);
     const onKeyDown = event => {
       if ((event.ctrlKey || event.metaKey) && event.code === "Space") { event.preventDefault(); clear(); local(true); return; }
       if (!popup) return;
@@ -210,6 +236,7 @@ export const editorCompletionUiScript = (port: number) => `
     const onScroll = () => { if (popup) place(); };
     view.scrollDOM.addEventListener("scroll", onScroll);
     return () => {
+      disposed = true; clearInterval(healthTimer);
       clear(); clearTimeout(selectionTimer); toolbar.remove(); host.style.position = oldPosition;
       if (changeTimer) { clearTimeout(changeTimer); report({ type: "file.changed" }); }
       view.dom.removeEventListener("keydown", onKeyDown, true);

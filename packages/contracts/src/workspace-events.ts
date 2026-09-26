@@ -1,4 +1,4 @@
-import type { FlowchartNodeSelection, WorkspaceLearningProgress } from "./workspace.js";
+import type { FlowchartNodeSelection, WorkspaceLearningProgress, WorkspaceModelHealth } from "./workspace.js";
 
 /** Which student-facing surface produced a workspace event. */
 export type WorkspaceSurface = "editor" | "chat" | "terminal" | "flowchart" | "learn" | "question" | "runtime";
@@ -39,11 +39,12 @@ export type WorkspaceEventInput =
 	/** changed: names of capability settings that differ, or "project" when the workspace scope changed. */
 	| { type: "capability.changed"; changed: string[] }
 	/**
-	 * What a Chat session observed about its model: available: false after a provider
-	 * failure, true again after a successful response. Presentation only; request
+	 * What a trusted model execution boundary observed for its bound Chat session.
+	 * Only classified provider/model/auth/network failures make it unavailable; a
+	 * successful request restores availability. `health` carries only a fixed status. Presentation only; request
 	 * admission and tool guards still decide what may run.
 	 */
-	| { type: "model.health"; available: boolean; toolUse?: boolean }
+	| { type: "model.health"; available: boolean; toolUse?: boolean; health?: WorkspaceModelHealth }
 	/** Bounded publication of the session's WorkflowController state, so other surfaces follow it live. */
 	| ({ type: "learning.progress" } & WorkspaceLearningProgress);
 

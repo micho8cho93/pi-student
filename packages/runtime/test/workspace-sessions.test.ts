@@ -50,7 +50,7 @@ async function chat(project: string, shared: WorkspaceEventJournal, identity: { 
 	activity.extension(pi as never);
 	await fire("session_start");
 	const prompt = async () => { const value = (await fire("before_agent_start", { systemPrompt: "base" }))?.systemPrompt as string | undefined; await shared.flush(); return value; };
-	const reply = async (message: object = {}) => { await fire("message_end", { message: { role: "assistant", ...message } }); await shared.flush(); };
+	const reply = async (message: object = {}) => { await fire("message_end", { message: { role: "assistant", stopReason: "stop", ...message } }); await shared.flush(); };
 	return { fire, prompt, reply, workflow, activity, notices, rebind: (next: typeof identity) => { current = next; } };
 }
 
@@ -76,7 +76,7 @@ describe("two Chat sessions in one project", () => {
 		one.workflow.updateLearningState({ currentStage: "understand", goalSummary: "Render the list", understandingReady: true, readyForNextStage: true });
 		const first = (await one.prompt())!;
 		capabilityState(one.workflow).turns = 1;
-		await one.reply({ stopReason: "error" });
+		await one.reply({ stopReason: "error", errorMessage: "503 provider unavailable" });
 
 		const second = (await two.prompt())!;
 		expect(first).toContain("Student modified (typed themselves):\n- src/app.ts");
@@ -226,7 +226,7 @@ describe("StudentWorkspaceSnapshot", () => {
 	it("reports a provider outage Chat observed and recovers when Chat does", () => {
 		const down = resolveStudentCapabilities(context, { ...sessionCapabilitySignals({ model: { available: false, at: "t" } }), models: ["local/tutor"] });
 		const snapshot = buildStudentWorkspaceSnapshot({ workspace: { capabilities: down, ui }, session: {}, map: noMap });
-		expect(snapshot.model).toEqual({ available: false, reason: "provider_unavailable" });
+		expect(snapshot.model).toMatchObject({ available: false, reason: "provider_unavailable" });
 		expect(snapshot.fallback?.canStill).toContain("edit the code yourself");
 		const up = resolveStudentCapabilities(context, { ...sessionCapabilitySignals({ model: { available: true, at: "t" } }), models: ["local/tutor"] });
 		expect(buildStudentWorkspaceSnapshot({ workspace: { capabilities: up, ui }, session: {}, map: noMap }).model.available).toBe(true);

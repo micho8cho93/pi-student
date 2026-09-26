@@ -61,7 +61,7 @@ async function chat(project: string, shared: WorkspaceEventJournal, identity: Id
 	activity.extension(pi as never);
 	await fire("session_start");
 	const prompt = async () => { const value = (await fire("before_agent_start", { systemPrompt: "base" }))?.systemPrompt as string | undefined; await shared.flush(); return value; };
-	const reply = async (message: object = {}) => { await fire("message_end", { message: { role: "assistant", ...message } }); await shared.flush(); };
+	const reply = async (message: object = {}) => { await fire("message_end", { message: { role: "assistant", stopReason: "stop", ...message } }); await shared.flush(); };
 	return { fire, prompt, reply, workflow, activity,
 		rebind: (next: typeof identity) => { current = next; }, select: (next: TeacherContext) => { selection = next; } };
 }
@@ -126,7 +126,7 @@ describe("session-scoped events require a Chat session", () => {
 		one.workflow.updateLearningState({ currentStage: "understand", goalSummary: "Render the list", understandingReady: true, readyForNextStage: true });
 		await one.prompt();
 		capabilityState(one.workflow).turns = 1;
-		await one.reply({ stopReason: "error" });
+		await one.reply({ stopReason: "error", errorMessage: "503 provider unavailable" });
 		const gui = new WorkspaceEventStream({ journal: shared });
 		gui.emit({ projectPath: project }, "terminal", { type: "test.failed", command: "npm test", exitCode: 1 });
 		const none = { projectPath: project };
@@ -188,9 +188,9 @@ describe("session-scoped events require a Chat session", () => {
 			const shared = await journal();
 			const one = await chat(project, shared, { sessionId: "session-one" });
 			await one.prompt();
-			await one.reply({ stopReason: "error" });
+			await one.reply({ stopReason: "error", errorMessage: "503 provider unavailable" });
 			const { owner, other, none } = await views(project, shared);
-			expect(owner.snapshot.model).toEqual({ available: false, reason: "provider_unavailable" });
+			expect(owner.snapshot.model).toMatchObject({ available: false, reason: "provider_unavailable" });
 			for (const view of [other, none]) { expect(view.session.model).toBeUndefined(); expect(view.snapshot.model.available).toBe(true); }
 		});
 
@@ -249,7 +249,7 @@ describe("managed workspace identity fails closed", () => {
 		expect(prompt ?? "").not.toMatch(/alice-secret|Workspace context/);
 		await unknown.fire("tool_call", { toolName: "edit", toolCallId: "u", input: { path: "/workspace/src/unknown.ts" } });
 		await unknown.fire("tool_result", { toolName: "edit", toolCallId: "u", isError: false, content: [] });
-		await unknown.reply({ stopReason: "error" });
+		await unknown.reply({ stopReason: "error", errorMessage: "503 provider unavailable" });
 		unknown.activity.emit("editor", { type: "file.changed", file: "src/unknown.ts" });
 		await shared.flush();
 		// Nothing was written anywhere, in particular not to a user-less class key.
@@ -310,7 +310,7 @@ describe("delayed results after rebinding", () => {
 		await one.fire("tool_result", { toolName: "write", toolCallId: "write", isError: false, content: [] });
 		await one.fire("tool_result", { toolName: "bash", toolCallId: "bash", isError: true, content: [{ type: "text", text: "Error: boom\nCommand exited with code 2" }] });
 		await one.fire("tool_result", { toolName: "bash", toolCallId: "test", isError: true, content: [{ type: "text", text: "FAIL a.test.ts\nCommand exited with code 1" }] });
-		await one.reply({ stopReason: "error" });
+		await one.reply({ stopReason: "error", errorMessage: "503 provider unavailable" });
 
 		const late: WorkspaceEventType[] = ["agent.files_changed", "terminal.command_finished", "test.passed", "test.failed", "model.health", "budget.exhausted", "budget.warning"];
 		const gui = new WorkspaceEventStream({ journal: shared });
@@ -330,7 +330,7 @@ describe("delayed results after rebinding", () => {
 		await one.prompt();
 		await one.fire("tool_call", { toolName: "edit", toolCallId: "fresh", input: { path: "/workspace/src/c.ts" } });
 		await one.fire("tool_result", { toolName: "edit", toolCallId: "fresh", isError: false, content: [] });
-		await one.reply({ stopReason: "error" });
+		await one.reply({ stopReason: "error", errorMessage: "503 provider unavailable" });
 		expect(one.activity.stream.ui(after).recentChanges.map(change => change.file)).toEqual(["src/c.ts"]);
 		expect(one.activity.stream.session(after)).toMatchObject({ model: { available: false }, budget: { exhausted: { lane: "agent" } } });
 	});

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { BudgetLane, CapabilityAvailability, CapabilityRestriction, EffectiveStudentCapabilities, ExecutionContext, LearningStage, StudentWorkspaceContext,
-	WorkspaceScope, WorkspaceUiState } from "@pi-student/contracts";
+	WorkspaceModelHealth, WorkspaceScope, WorkspaceUiState } from "@pi-student/contracts";
 import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
 import { authorizeExtension, type ExtensionCatalogEntry } from "./extension-authorization.js";
 import { resolveWorkspaceBudget, type BudgetSignals } from "./workspace-budget.js";
@@ -15,7 +15,7 @@ export interface StudentCapabilityInputs extends BudgetSignals {
 	 * unreachable; toolUse: false when the model cannot reliably call tools.
 	 * Omitted fields mean "no evidence of a problem".
 	 */
-	model?: { available?: boolean; toolUse?: boolean };
+	model?: { health?: WorkspaceModelHealth; available?: boolean; toolUse?: boolean };
 	/** Whether the agent sandbox is running. Omit when it has not been checked. */
 	sandbox?: { running: boolean };
 }
@@ -38,7 +38,10 @@ export function resolveStudentCapabilities(context: ExecutionContext, inputs: St
 	if (context.classId && !context.projectId) ai = deny("Select a class project before continuing.", "project_not_selected");
 	else if (context.organizationId && !settings.models.length) ai = deny("No model is approved for this project.", "no_model");
 	else if (inputs.models && !models.length) ai = deny(context.organizationId ? "No institution-approved model is available for this project." : "No configured model is available.", "no_model");
-	else if (inputs.model?.available === false) ai = deny("The AI model is unavailable right now.", "provider_unavailable");
+	else if (inputs.model?.available === false) {
+		const status = inputs.model.health?.status;
+		ai = deny(status === "authentication_failure" ? "Reconnect your AI provider to continue." : status === "transient_failure" ? "The AI connection failed temporarily. Try again." : "The AI model is unavailable right now.", status && status !== "available" ? status : "provider_unavailable");
+	}
 	const within = (lane: BudgetLane): CapabilityAvailability => !ai.allowed ? ai
 		: lane.status === "exhausted" ? deny(lane.reason ?? "The AI budget has been reached.", "budget_exhausted") : allowed;
 	// Chat carries tutoring; it stays open after agent execution closes.

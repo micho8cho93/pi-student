@@ -136,7 +136,7 @@ describe.skipIf(!executablePath)("browser student journeys", () => {
 		expect((await h.snapshot("wks_b")).map).toMatchObject({ available: false });
 		// Session-only state stays in its session: B's Learn and a failed B reply do not reach A.
 		b.workflow.setLearnMode(true);
-		await b.turn({ stopReason: "error" });
+		await b.turn({ stopReason: "error", errorMessage: "503 provider unavailable" });
 		expect((await h.snapshot("wks_b")).learn.enabled).toBe(true);
 		expect((await h.snapshot("wks_b")).model).toMatchObject({ available: false, reason: "provider_unavailable" });
 
@@ -173,10 +173,11 @@ describe.skipIf(!executablePath)("browser student journeys", () => {
 		const page = await openWorkspace("wks_a");
 		const a = await h.chat("wks_a");
 		// Chat's provider fails; every surface learns it from the same snapshot.
-		await a.turn({ stopReason: "error" });
+		await a.turn({ stopReason: "error", errorMessage: "503 provider unavailable" });
 		expect(a.notices.at(-1)).toContain("The AI model is unavailable right now");
 		await poll(() => text(page, "#pi-student-project-progress .next")).toContain("The AI model is unavailable right now.");
 		await poll(() => text(page, "#pi-student-project-progress .next")).toContain("Code and Terminal are still available.");
+		await poll(() => text(page, '[aria-label="Code completion settings"]')).toBe("AI suggestions paused");
 		const degraded = await h.snapshot("wks_a");
 		expect(degraded.model).toMatchObject({ available: false, reason: "provider_unavailable" });
 		for (const action of ["open-editor", "use-terminal", "run-tests", "view-map"]) {
@@ -189,6 +190,7 @@ describe.skipIf(!executablePath)("browser student journeys", () => {
 		await page.locator("[data-pi-student-flowchart-tab]").click();
 		await page.locator('#pi-student-flowchart [data-node-id="score"]').waitFor();
 		expect(h.modelRequests).toHaveLength(requests);
+		await poll(() => text(page, "#pi-student-flowchart .refresh-error")).toContain("The saved map remains available.");
 		await page.locator("#pi-student-flowchart .refresh").click();
 		await poll(() => text(page, "#pi-student-flowchart .refresh-error")).toContain("Showing the previous flowchart.");
 		await poll(() => text(page, "#pi-student-flowchart .refresh-error")).toContain("edit the code yourself");
@@ -206,6 +208,54 @@ describe.skipIf(!executablePath)("browser student journeys", () => {
 		await a.turn();
 		await poll(async () => (await h.snapshot("wks_a")).model.available).toBe(true);
 		await poll(() => text(page, "#pi-student-project-progress .next")).not.toContain("unavailable");
+		await poll(() => text(page, '[aria-label="Code completion settings"]')).not.toContain("paused");
 		await page.close();
 	}, 120_000);
+	it("Map discovers an outage first; generic failures do not poison health and trusted requests recover it", async () => {
+		harness = await startBrowserWorkspace();
+		const h = harness;
+		const page = await openWorkspace("wks_a");
+		const a = await h.chat("wks_a");
+		await page.locator("#new-tab").click();
+		await page.locator("[data-pi-student-flowchart-choice]").click();
+		await page.locator('#pi-student-flowchart [data-node-id="score"]').click();
+		await poll(async () => (await h.snapshot("wks_a")).map.selectedNode?.id).toBe("score");
+		const saved = (await h.snapshot("wks_a")).map.generatedAt;
+		await page.locator("#chat-tab").click();
+		await typeCode(page, WORKING);
+		await page.locator("[data-pi-student-flowchart-tab]").click();
+
+		// A generic assistant/tool error is not evidence about provider health.
+		await a.turn({ stopReason: "error", errorMessage: "Tool execution failed" });
+		expect((await h.snapshot("wks_a")).model.available).toBe(true);
+		h.internalError(true);
+		await page.locator("#pi-student-flowchart .refresh").click();
+		await poll(() => text(page, "#pi-student-flowchart .refresh-error")).toContain("Showing the previous flowchart.");
+		expect((await h.snapshot("wks_a")).model.available).toBe(true);
+		h.internalError(false);
+
+		h.outage(true);
+		await page.locator("#pi-student-flowchart .refresh").click();
+		await poll(async () => (await h.snapshot("wks_a")).model.health?.status).toBe("provider_unavailable");
+		await poll(() => text(page, "#pi-student-project-progress .next")).toContain("Code and Terminal are still available.");
+		expect((await h.snapshot("wks_a")).map).toMatchObject({ generatedAt: saved, stale: true, selectedNode: { id: "score" } });
+		expect((await h.snapshot("wks_a", "agent-a2")).model.available).toBe(true);
+		expect((await h.snapshot("wks_b")).model.available).toBe(true);
+		await a.turn({ stopReason: "aborted" });
+		expect((await h.snapshot("wks_a")).model.available).toBe(false);
+
+		// Chat did not publish the outage: its next genuine success still clears it.
+		h.outage(false);
+		await a.turn();
+		await poll(async () => (await h.snapshot("wks_a")).model.available).toBe(true);
+		expect((await h.snapshot("wks_a")).map.generatedAt).toBe(saved);
+
+		// A successful Map call also clears Chat's outage, without waiting for a Chat turn.
+		await a.turn({ stopReason: "error", errorMessage: "503 provider unavailable" });
+		await page.locator("#pi-student-flowchart .refresh").click();
+		await poll(async () => (await h.snapshot("wks_a")).model.available).toBe(true);
+		await poll(async () => (await h.snapshot("wks_a")).map.stale).toBe(false);
+		await page.close();
+	}, 120_000);
+
 });

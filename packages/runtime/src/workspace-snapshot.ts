@@ -30,7 +30,7 @@ export function sessionCapabilitySignals(session: WorkspaceSessionState): Pick<S
 		...(exhausted?.lane === "all" ? { exhausted: exhausted.reason } : exhausted?.lane === "agent" ? { agentExhausted: exhausted.reason } : {}),
 		...(session.budget?.warning ? { warning: session.budget.warning.reason } : {}),
 		...(session.model && (session.model.available !== undefined || session.model.toolUse !== undefined)
-			? { model: { ...(session.model.available === undefined ? {} : { available: session.model.available }), ...(session.model.toolUse === undefined ? {} : { toolUse: session.model.toolUse }) } } : {}),
+			? { model: { ...(session.model.health ? { health: session.model.health } : {}), ...(session.model.available === undefined ? {} : { available: session.model.available }), ...(session.model.toolUse === undefined ? {} : { toolUse: session.model.toolUse }) } } : {}),
 	};
 }
 
@@ -48,7 +48,7 @@ export interface StudentWorkspaceSnapshotInput {
 	identityRequired?: boolean;
 }
 
-const MODEL_CODES = new Set<CapabilityRestriction>(["no_model", "provider_unavailable", "project_not_selected", "identity_required"]);
+const MODEL_CODES = new Set<CapabilityRestriction>(["no_model", "provider_unavailable", "model_unavailable", "authentication_failure", "transient_failure", "project_not_selected", "identity_required"]);
 
 /**
  * Derives the current StudentWorkspaceSnapshot. Nothing here is stored: every
@@ -84,7 +84,7 @@ export function buildStudentWorkspaceSnapshot(input: StudentWorkspaceSnapshotInp
 		learn: resolveLearnScaffolding(learnEnabled),
 		capabilities,
 		budget: describeWorkspaceBudget(capabilities.budget),
-		model: { available: !modelCode, ...(modelCode ? { reason: modelCode } : {}), ...(session.model?.selected ? { selected: session.model.selected } : {}) },
+		model: { available: !modelCode, ...(session.model?.health ? { health: session.model.health } : {}), ...(modelCode ? { reason: modelCode } : {}), ...(session.model?.selected ? { selected: session.model.selected } : {}) },
 		actions,
 		...(fallback ? { fallback } : {}),
 		map: { ...map, staleFiles: map.staleFiles.filter(safe), ...(selectedNode && (!selectedNode.file || safe(selectedNode.file)) ? { selectedNode } : { selectedNode: undefined }) },

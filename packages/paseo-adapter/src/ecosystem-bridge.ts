@@ -1,3 +1,4 @@
+import { failedModelHealth, workspaceModelHealthReporter } from "@pi-student/runtime/workspace-model-health";
 import { LearnSettingsStore } from "@pi-student/education/settings";
 import { resolveLearnScaffolding } from "@pi-student/education/learn-scaffolding";
 import { resolveLearnSession } from "./paseo-session.js";
@@ -242,7 +243,8 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				const body = await readBody(request, 80_000) as CompletionRequest;
 				const controller = new AbortController();
 				response.once("close", () => controller.abort());
-				return json(response, 200, await completions.suggest(root, body, controller.signal));
+				return json(response, 200, await completions.suggest(root, body, controller.signal, workspaceModelHealthReporter(workspaceEvents,
+					await eventScope(root, url.searchParams.get("workspaceId"), url.searchParams.get("agentId")), "editor")));
 			}
 			if (request.method === "POST" && url.pathname === "/workspace-events") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
@@ -352,17 +354,17 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				const activeProject = workspaceId
 					? await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath)
 					: await resolvePaseoProjectPath(paseoHome, projectName!);
-				const scope = await eventScope(activeProject);
+				const scope = await eventScope(activeProject, workspaceId, url.searchParams.get("agentId"));
 				// Viewing the saved map reads only local files; it never needs AI or a network.
 				if (request.method === "GET") {
 					const stored = await mapStore.read<Flowchart>(scope).catch(() => undefined);
 					return json(response, 200, { chart: stored?.chart ?? null, map: await mapStore.status(scope).catch(() => NO_MAP) });
 				}
-				const key = workspaceEventKey(scope);
+				const key = workspaceEventKey(scope) + ":" + (scope.sessionId ?? "");
 				let job = flowchartJobs.get(key);
 				if (!job) {
 					job = resolveModelExecution(activeProject).then(({ runtime, context, beforeRequest }) =>
-						generateFlowchart(activeProject, runtime, context, beforeRequest)).then(async ({ sources, ...chart }) => {
+						generateFlowchart(activeProject, runtime, context, beforeRequest, workspaceModelHealthReporter(workspaceEvents, scope, "flowchart"))).then(async ({ sources, ...chart }) => {
 						// Saved only after a successful generation, so a failed refresh keeps the last valid map.
 						await mapStore.save(scope, chart, sources);
 						await workspaceEvents.refresh(scope).catch(() => {});
@@ -376,10 +378,10 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				try { return json(response, 200, await job); }
 				catch (error) {
 					// Say what still works (an existing map, editing, terminal) instead of only reporting the failure.
-					const observed = error instanceof FlowchartModelError ? { model: { available: false } } : {};
+					const health = error instanceof FlowchartModelError ? failedModelHealth(error) : undefined;
 					const status = error instanceof CompletionError ? error.status : error instanceof FlowchartModelError ? 502 : 500;
 					return json(response, status, { error: safeError(error), map: await mapStore.status(scope).catch(() => NO_MAP),
-						...await workspaceActions(activeProject, scope, {}, observed) });
+						...await workspaceActions(activeProject, scope, { workspaceId, agentId: url.searchParams.get("agentId") }, !scope.sessionId && health ? { model: { available: false, health } } : {}) });
 				}
 			}
 			if (request.method === "GET" && url.pathname === "/providers") {

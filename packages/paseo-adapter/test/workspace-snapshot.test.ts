@@ -15,6 +15,31 @@ const headers = { "Content-Type": "application/json", "X-Pi-Student": "ecosystem
 const action = (snapshot: { actions: Array<{ action: string; available: boolean; reason?: string }> }, name: string) => snapshot.actions.find(item => item.action === name);
 
 describe("live workspace snapshot", () => {
+	it("autocomplete reports trusted failures and recovers the bound session, without browser-forged health", async () => {
+		harness = await startBrowserWorkspace();
+		const h = harness;
+		const complete = (agent = "agent-a") => fetch(`${h.bridgeUrl()}/editor-completion?workspaceId=wks_a&agentId=${agent}`, {
+			method: "POST", headers, body: JSON.stringify({ filename: "score.js", content: WORKING, cursor: WORKING.length, model: "auto", health: { status: "provider_unavailable" } }),
+		});
+		expect((await complete()).status).toBe(200);
+		expect((await h.snapshot("wks_a")).model.available).toBe(true);
+		h.internalError(true);
+		expect((await complete()).status).toBe(502);
+		expect((await h.snapshot("wks_a")).model.available).toBe(true);
+		h.internalError(false);
+		h.outage(true);
+		expect((await complete()).ok).toBe(false);
+		expect((await h.snapshot("wks_a")).model.health).toEqual({ status: "provider_unavailable" });
+		expect((await h.snapshot("wks_a", "agent-a2")).model.available).toBe(true);
+		expect((await h.snapshot("wks_a", false)).model.available).toBe(true);
+		expect((await h.snapshot("wks_b")).model.available).toBe(true);
+		h.outage(false);
+		expect((await complete("agent-a2")).status).toBe(200);
+		expect((await h.snapshot("wks_a")).model.available).toBe(false);
+		expect((await complete()).status).toBe(200);
+		expect((await h.snapshot("wks_a")).model.health).toEqual({ status: "available" });
+	});
+
 	it("follows each Chat session's budget, model health, Learn and progress without mixing sessions of one project", async () => {
 		const policy = resolveEffectivePolicy({ projectId: "project-a", delegatedPaths: [],
 			organization: { scope: "organization", version: 1, settings: { models: ["school/tutor"], limits: { turns: 1, tutoringTurns: 5 } } } });
@@ -33,9 +58,9 @@ describe("live workspace snapshot", () => {
 		expect(action(await h.snapshot("wks_a", "agent-a2"), "agent-edit")?.available).toBe(true);
 
 		// Chat two's provider fails; its conversation reports the outage, then recovers.
-		await second.turn({ stopReason: "error" });
+		await second.turn({ stopReason: "error", errorMessage: "503 provider unavailable" });
 		const outage = await h.snapshot("wks_a", "agent-a2");
-		expect(outage.model).toEqual({ available: false, reason: "provider_unavailable" });
+		expect(outage.model).toMatchObject({ available: false, reason: "provider_unavailable" });
 		expect(outage.fallback.headline).toBe("The AI model is unavailable right now.");
 		expect((await h.snapshot("wks_a", "agent-a")).model.available).toBe(true);
 		await second.turn();
