@@ -272,7 +272,8 @@ describe("student journeys across the workspace", () => {
 		const b = await h.chat("b");
 		const workspace = await b.workspace();
 		expect(workspace.scope.projectId).toBeUndefined(); expect(workspace.scope.organizationId).toBeUndefined();
-		expect(b.activity.stream.events(b.activity.scope()!)).toEqual([]);
+		// B's Chat publishes only its own fresh learning state; nothing recorded in A follows it.
+		expect(b.activity.stream.events(b.activity.scope()!)).toEqual([expect.objectContaining({ type: "learning.progress", stage: "understand", planApproved: false })]);
 		expect(await b.prompt()).not.toMatch(/A private|score.js|score.test|school|Project capability settings/);
 		await writeFile(path.join(h.projects.b, "score.js"), workingCode);
 		await h.report({ type: "file.changed", file: "score.js" }, "b");

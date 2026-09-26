@@ -120,8 +120,14 @@ export async function createLearningAgentRuntime(
 		if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(runtimeCwd);
 		const sandboxCwd = sandboxRuntime.getWorkspacePath();
 		const activityWorkflow = workflow;
+		// The signed-in student comes from the authorized context; resolved once per session, retried until it succeeds.
+		let student: string | undefined;
 		const activity = createWorkspaceActivity(workflow, sandboxRuntime, {
 			contextStore: options.services?.contextStore,
+			identity: async () => {
+				student ??= (await options.services?.executionContext?.().catch(() => undefined))?.identity.userId;
+				return { userId: student, sessionId: sessionManager.getSessionId() };
+			},
 			capabilities: async observed => {
 				const context = await options.services?.executionContext?.();
 				return context && resolveStudentCapabilities(context, { ...observed, usage: capabilityState(activityWorkflow),

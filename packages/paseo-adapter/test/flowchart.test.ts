@@ -123,9 +123,10 @@ describe("student flowchart", () => {
 		expect(script).toContain("(state.learn && node.explanation) || node.detail");
 		expect(script).toContain('"Leads to "');
 		expect(script).toContain("Learn: Chat will explain from this step.");
-		// Learn arrives with workspace activity and re-renders the existing map; it never requests a new one.
+		// Learn arrives with the workspace snapshot of the Chat the map follows and re-renders the existing map; it never requests a new one.
 		const check = script.slice(script.indexOf("const checkStale"), script.indexOf("const ensurePanel"));
-		expect(check).toContain('activity.scaffolding?.flowchart?.detail === "educational"');
+		expect(check).toContain('snapshot.learn?.flowchart?.detail === "educational"');
+		expect(check).toContain("&agentId=");
 		expect(check).toContain("render()");
 		expect(check).not.toMatch(/generate\(|\/flowchart\?/);
 	});

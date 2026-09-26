@@ -15,9 +15,9 @@ insert into public.organization_memberships (organization_id,user_id,role) value
 insert into public.classes (id,teacher_id,organization_id,name,join_code) values
   ('a3000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000002',null,'Standalone settings class','ABC-234'),
   ('a3000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000002','a2000000-0000-0000-0000-000000000001','Managed settings class','DEF-567');
+-- Class creation already enrolled each class teacher (private.add_teacher_membership).
 insert into public.class_members (class_id,user_id,role,status) values
   ('a3000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000003','student','active'),
-  ('a3000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000002','teacher','active'),
   ('a3000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000003','student','active');
 insert into public.sessions (id,student_id,class_id,started_at,ended_at) values
   ('a4000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000003','a3000000-0000-0000-0000-000000000001',now(),now()),

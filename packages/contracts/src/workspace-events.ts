@@ -1,4 +1,4 @@
-import type { FlowchartNodeSelection } from "./workspace.js";
+import type { FlowchartNodeSelection, WorkspaceLearningProgress } from "./workspace.js";
 
 /** Which student-facing surface produced a workspace event. */
 export type WorkspaceSurface = "editor" | "chat" | "terminal" | "flowchart" | "learn" | "question" | "runtime";
@@ -37,7 +37,15 @@ export type WorkspaceEventInput =
 	/** lane: "agent" when only AI implementation stopped and tutoring continues; omitted when all AI stopped. */
 	| { type: "budget.exhausted"; reason: string; lane?: "agent" }
 	/** changed: names of capability settings that differ, or "project" when the workspace scope changed. */
-	| { type: "capability.changed"; changed: string[] };
+	| { type: "capability.changed"; changed: string[] }
+	/**
+	 * What a Chat session observed about its model: available: false after a provider
+	 * failure, true again after a successful response. Presentation only; request
+	 * admission and tool guards still decide what may run.
+	 */
+	| { type: "model.health"; available: boolean; toolUse?: boolean }
+	/** Bounded publication of the session's WorkflowController state, so other surfaces follow it live. */
+	| ({ type: "learning.progress" } & WorkspaceLearningProgress);
 
 export type WorkspaceEventType = WorkspaceEventInput["type"];
 
@@ -50,6 +58,12 @@ export type WorkspaceEvent = WorkspaceEventInput & {
 	readonly source: WorkspaceSurface;
 	/** Identifies the writing process so journal replays can be de-duplicated. */
 	readonly origin: string;
+	/**
+	 * The Chat session a session-scoped event belongs to (Learn, prompts, model,
+	 * budget, learning progress). Project-scoped events (files, tests, map) have none
+	 * and are shared by every session of the same student in the same project.
+	 */
+	readonly session?: string;
 	/** Set when the event refers to a credential-like path. Such events never reach model context. */
 	readonly sensitive?: true;
 };

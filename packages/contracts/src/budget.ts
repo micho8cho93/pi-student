@@ -47,6 +47,14 @@ export interface WorkspaceBudgetState {
 	};
 }
 
+/** One student-facing budget line: availability, never quotas. */
+export interface WorkspaceBudgetRow {
+	lane: keyof Omit<WorkspaceBudgetState, "session"> | "manual";
+	label: string;
+	status: BudgetLaneStatus | "unrestricted";
+	text: string;
+}
+
 /** Result of host-side request admission for one purpose. */
 export interface ModelAdmissionDecision {
 	warning: boolean;

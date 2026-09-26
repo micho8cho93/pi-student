@@ -62,12 +62,16 @@ identical with Learn on or off.
 ### Workspace continuity
 
 Learn state is mirrored into the workspace event stream (`learn.enabled`,
-`learn.disabled`, and the `learnMode` of each `chat.prompted`) and reduced into
-`WorkspaceUiState.learn`. The GUI toggle emits through the bridge; the chat
-runtime emits on changes and when it binds to a project. `/workspace-activity`
-returns the resolved `scaffolding`, so Code, Map and Terminal read the same
-profile as Chat. The stream is keyed per project, so Learn state never follows
-the student into another project.
+`learn.disabled`, and the `learnMode` of each `chat.prompted`). These are
+session-scoped events: they carry the Pi session id and are reduced into that
+session's `WorkspaceSessionState.learn`, so two Chats in the same project keep
+their own setting. The GUI toggle emits through the bridge for the conversation
+it names (`agentId`, resolved through Paseo's agent registry); the chat runtime
+emits on changes and when it binds to a project. `/workspace-activity` and
+`/workspace-snapshot` return the resolved scaffolding for the conversation the
+request follows, so Code, Map and Terminal read the same profile as that Chat.
+A request that follows no conversation sees Learn off. The stream is keyed per
+student project, so Learn state never follows the student into another project.
 
 ### `/question` context
 

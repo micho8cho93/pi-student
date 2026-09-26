@@ -1,4 +1,5 @@
-import type { WorkspaceBudgetState } from "./budget.js";
+import type { NextAvailableAction } from "./assistance.js";
+import type { WorkspaceBudgetRow, WorkspaceBudgetState } from "./budget.js";
 import type { LearningStage, ThinkingLevel } from "./policy.js";
 
 /** Machine-readable cause of a restriction. UI surfaces map these to student-facing labels. */
@@ -58,7 +59,13 @@ export interface EffectiveStudentCapabilities {
 	budget: WorkspaceBudgetState;
 }
 
-/** Authoritative identity of the workspace. Copied from ExecutionContext; never from UI input. */
+/**
+ * Authoritative identity of the workspace. Copied from ExecutionContext; never from UI input.
+ *
+ * Project identity (projectPath, projectId, organizationId, userId) keys project-scoped
+ * state: files, tests, the map and project policy. sessionId additionally scopes
+ * transient Chat state: Learn, prompts, model health, session budget and learning progress.
+ */
 export interface WorkspaceScope {
 	readonly projectPath: string;
 	readonly userId?: string;
@@ -105,7 +112,7 @@ export interface FlowchartNodeSelection extends FlowchartSourceRef {
 	label: string;
 }
 
-/** Transient editor/UI state. Not persisted; cannot change scope or capabilities. */
+/** Transient editor/UI state of a student project. Not persisted; cannot change scope or capabilities. */
 export interface WorkspaceUiState {
 	activeFile?: string;
 	openFiles: string[];
@@ -116,8 +123,8 @@ export interface WorkspaceUiState {
 	/** staleFiles: source files changed since the flowchart was generated. */
 	flowchart?: { generatedAt?: string; selectedNode?: FlowchartNodeSelection; stale: boolean; staleFiles?: string[] };
 	/**
-	 * Latest Learn Mode state reported in this workspace, so Code, Map and Terminal
-	 * follow the same setting as Chat. Scaffolding only; never a capability.
+	 * Learn Mode state of the Chat session this view follows, so Code, Map and
+	 * Terminal use the same setting as that Chat. Scaffolding only; never a capability.
 	 */
 	learn?: { enabled: boolean; at: string };
 }
@@ -154,6 +161,72 @@ export interface LearnScaffolding {
 		onFailure: "fix" | "explain-first";
 		/** Learn never blocks or delays the student's own terminal. */
 		blocksCommands: false;
+	};
+}
+
+/** Bounded view of a session's WorkflowController state. Summaries only; never prompts or code. */
+export interface WorkspaceLearningProgress {
+	stage: LearningStage;
+	goal?: string;
+	activeStep?: string;
+	understandingReady: boolean;
+	planApproved: boolean;
+	verificationPassed: boolean;
+}
+
+/**
+ * Transient state of one Chat session, reduced from its session-scoped events.
+ * It is a publication of the Chat process's authorities (WorkflowController,
+ * CapabilityState, observed model responses), never a second store of them.
+ */
+export interface WorkspaceSessionState {
+	learn?: { enabled: boolean; at: string };
+	model?: { selected?: string; available?: boolean; toolUse?: boolean; at: string };
+	/** lane "agent": only AI implementation stopped; "all": every AI surface stopped. */
+	budget?: { exhausted?: { reason: string; lane: "agent" | "all"; at: string }; warning?: { reason: string; at: string } };
+	progress?: WorkspaceLearningProgress & { at: string };
+	lastPromptAt?: string;
+}
+
+/** A persisted map as the workspace sees it. Viewing it never needs AI. */
+export interface WorkspaceMapStatus {
+	available: boolean;
+	generatedAt?: string;
+	/** Source files changed, removed or added since generation, computed from the files on disk. */
+	stale: boolean;
+	staleFiles: string[];
+	selectedNode?: FlowchartNodeSelection;
+	filesRead?: number;
+	model?: string;
+}
+
+/**
+ * The one current answer to "what is the state of this student's workspace?".
+ * Derived on request from ExecutionContext, effective policy, model admission and
+ * health, the session's workflow state, the workspace events and the persisted map.
+ * Surfaces render it; none of them owns a copy. Metadata only: no host paths,
+ * file contents, prompts, command output or credentials.
+ */
+export interface StudentWorkspaceSnapshot {
+	/** Content hash; equal revisions mean nothing a surface shows has changed. */
+	revision: string;
+	scope: { managed: boolean; projectId?: string; classId?: string; organizationId?: string; session: boolean };
+	learning: WorkspaceLearningProgress & {
+		/** live: published by the running Chat session; saved: its last persisted snapshot; default: no session state yet. */
+		source: "live" | "saved" | "default";
+	};
+	learn: LearnScaffolding;
+	capabilities: EffectiveStudentCapabilities;
+	budget: WorkspaceBudgetRow[];
+	model: { available: boolean; reason?: CapabilityRestriction; selected?: string };
+	actions: NextAvailableAction[];
+	fallback?: { headline: string; canStill: string[]; hint?: string };
+	map: WorkspaceMapStatus;
+	activity: {
+		activeFile?: string;
+		recentChanges: WorkspaceFileChange[];
+		/** Outcome of the latest test run, without output excerpts. */
+		lastTest?: Omit<WorkspaceTestResult, "summary">;
 	};
 }
 

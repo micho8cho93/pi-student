@@ -6,6 +6,12 @@ import { describe, expect, it } from "vitest";
 import { createEcosystemBridgeServer, ECOSYSTEM_BRIDGE_PORT, resolvePaseoWorkspacePath } from "@pi-student/paseo-adapter/ecosystem-bridge";
 import { WorkspaceEventJournal, WorkspaceEventStream } from "@pi-student/runtime/workspace-events";
 import { buildWorkspaceChatContext } from "@pi-student/runtime/workspace-chat-context";
+import { resolveExecutionContext } from "@pi-student/runtime/execution-context";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+
+type Action = { action: string; available: boolean; reason?: string };
+const configuredRuntime = { getAvailable: async () => [{ provider: "local", id: "tutor", name: "Tutor", reasoning: false, cost: { input: 0, output: 0 } }],
+	getProviderAuthStatus: () => ({ configured: true }) } as unknown as ModelRuntime;
 
 describe("ecosystem bridge", () => {
 	it("uses one local bridge and resolves only registered Paseo workspace ids", async () => {
@@ -66,14 +72,27 @@ describe("ecosystem bridge", () => {
 			expect(context).toContain('- Selected node: "Render page" — src/app.js:4');
 			expect(context).not.toContain("ghp_");
 
+			// This bridge uses the real model runtime. The hermetic test setup gives it an empty Pi
+			// agent directory, so no model is configured, whatever the developer machine has.
+			const unconfigured = await (await fetch(`${base}/workspace-actions?workspaceId=wks_student-1`)).json() as { actions: Action[] };
+			expect(unconfigured.actions.find(item => item.action === "ask-guidance")).toMatchObject({ available: false, reason: "no_model" });
+			for (const action of ["open-editor", "use-terminal", "run-tests"]) expect(unconfigured.actions.find(item => item.action === action)?.available).toBe(true);
+
 			// Fallback actions: manual work is always available, whatever happens to AI access.
-			for (const query of ["", "&model=unavailable"]) {
-				const response = await fetch(`${base}/workspace-actions?workspaceId=wks_student-1${query}`);
-				const { actions } = await response.json() as { actions: Array<{ action: string; available: boolean; reason?: string }> };
-				expect(response.status).toBe(200);
-				for (const action of ["open-editor", "use-terminal", "run-tests"]) expect(actions.find(item => item.action === action)?.available).toBe(true);
-				if (query) expect(actions.find(item => item.action === "ask-guidance")).toMatchObject({ available: false, reason: "provider_unavailable" });
-			}
+			const configuredBridge = createEcosystemBridgeServer(project, paseoHome, { resolveModelExecution: async root => ({ runtime: configuredRuntime,
+				context: await resolveExecutionContext({ workspacePath: root, selection: {}, identityProvider: { getIdentity: async () => ({ kind: "personal" as const }) },
+					policyProvider: { resolvePolicy: async () => undefined } }) }) });
+			await new Promise<void>(resolve => configuredBridge.listen(0, "127.0.0.1", resolve));
+			try {
+				const configured = `http://127.0.0.1:${(configuredBridge.address() as AddressInfo).port}`;
+				for (const query of ["", "&model=unavailable"]) {
+					const response = await fetch(`${configured}/workspace-actions?workspaceId=wks_student-1${query}`);
+					const { actions } = await response.json() as { actions: Action[] };
+					expect(response.status).toBe(200);
+					for (const action of ["open-editor", "use-terminal", "run-tests"]) expect(actions.find(item => item.action === action)?.available).toBe(true);
+					expect(actions.find(item => item.action === "ask-guidance")).toMatchObject(query ? { available: false, reason: "provider_unavailable" } : { available: true });
+				}
+			} finally { await new Promise(resolve => configuredBridge.close(resolve)); }
 		} finally {
 			await new Promise(resolve => server.close(resolve));
 			if (previousHome === undefined) delete process.env.PI_STUDENT_HOME; else process.env.PI_STUDENT_HOME = previousHome;

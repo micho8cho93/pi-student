@@ -13,19 +13,23 @@ export const projectProgressUiScript = (port: number) => `
     if (label !== undefined) value.textContent = label;
     return value;
   };
-  const request = async (workspace, agent) => {
-    const url = new URL(endpoint + '/project-progress');
+  // One live StudentWorkspaceSnapshot per workspace + Chat. With a revision the bridge answers when something changes.
+  const request = async (workspace, agent, since) => {
+    const url = new URL(endpoint + '/workspace-snapshot');
     url.searchParams.set('workspaceId', workspace);
     if (agent) url.searchParams.set('agentId', agent);
+    if (since) { url.searchParams.set('since', since); url.searchParams.set('wait', '15000'); }
     const response = await fetch(url, { headers: { 'X-Pi-Student': 'ecosystem' } });
     if (!response.ok) throw new Error('Project progress is unavailable.');
-    return response.json();
+    const snapshot = await response.json();
+    return { revision: snapshot.revision, progress: snapshot.learning?.source === 'default' ? null : snapshot.learning,
+      actions: snapshot.actions, fallback: snapshot.fallback, activeFile: snapshot.activity?.activeFile, managed: snapshot.scope?.managed };
   };
   const stageLabels = [
     ['understand', 'Understand project'], ['plan', 'Plan change'],
     ['implement', 'Implement'], ['verify', 'Test'], ['review', 'Review']
   ];
-  let lastKey = '', lastData = null, loading = false, advanced = false;
+  let lastKey = '', lastData = null, loading = false, advanced = false, following = '';
   const technicalControls = () => {
     const hide = lastData?.managed && !advanced;
     document.querySelectorAll('[data-pi-student-agent-id] [data-testid="combined-model-selector"], [data-pi-student-agent-id] [data-testid="agent-thinking-selector"], [data-pi-student-agent-id] [data-testid="agent-controls-thinking"]').forEach(control => {
@@ -105,6 +109,7 @@ export const projectProgressUiScript = (port: number) => `
     root.querySelector('details').addEventListener('toggle', () => { if (root.querySelector('details').open) void refresh(); });
     render();
   };
+  const current = () => workspaceId() + ':' + (activeAgent() || '');
   const refresh = async () => {
     const workspace = workspaceId();
     if (!workspace || loading) return;
@@ -113,18 +118,35 @@ export const projectProgressUiScript = (port: number) => `
     loading = true;
     try {
       const data = await request(workspace, agent);
-      if (key !== workspaceId() + ':' + (activeAgent() || '')) return;
+      if (key !== current()) return;
       lastKey = key;
       lastData = data;
       render();
     } catch { /* The workspace remains usable while the bridge starts. */ }
     finally { loading = false; }
   };
+  /** Follows the snapshot for one workspace + Chat until either changes; never shows another project's state. */
+  const follow = async key => {
+    following = key;
+    let revision = '';
+    while (following === key) {
+      const [workspace, agent] = key.split(':');
+      try {
+        const data = await request(workspace, agent || null, revision);
+        if (following !== key || key !== current()) return;
+        revision = data.revision;
+        lastKey = key;
+        lastData = data;
+        render();
+      } catch { await new Promise(resolve => setTimeout(resolve, 4000)); }
+    }
+  };
   const tick = () => {
-    const key = workspaceId() + ':' + (activeAgent() || '');
+    const key = current();
     if (key !== lastKey) { lastData = null; lastKey = key; }
     mount(); technicalControls();
-    if (workspaceId()) void refresh();
+    if (!workspaceId()) { following = ''; return; }
+    if (following !== key) void follow(key);
   };
   const start = () => { tick(); setInterval(tick, 4000); new MutationObserver(mount).observe(document.body, { childList: true, subtree: true }); };
   if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });

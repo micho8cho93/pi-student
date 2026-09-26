@@ -1,4 +1,4 @@
-import type { BudgetLane, CapabilityPolicy, WorkspaceBudgetState } from "@pi-student/contracts";
+import type { BudgetLane, CapabilityPolicy, WorkspaceBudgetRow, WorkspaceBudgetState } from "@pi-student/contracts";
 import type { CapabilityState } from "@pi-student/policy/capability-runtime";
 
 export type BudgetUsage = Pick<CapabilityState, "costLimitReached" | "agentLimitReached" | "tutoringLimitReached"
@@ -62,7 +62,7 @@ const STATUS_TEXT: Record<BudgetLane["status"], string> = {
  * Student-facing budget summary. Shows availability, never quotas: students
  * see what they can do, teachers configure the numbers.
  */
-export function describeWorkspaceBudget(budget: WorkspaceBudgetState): Array<{ lane: keyof Omit<WorkspaceBudgetState, "session"> | "manual"; label: string; status: BudgetLane["status"] | "unrestricted"; text: string }> {
+export function describeWorkspaceBudget(budget: WorkspaceBudgetState): WorkspaceBudgetRow[] {
 	const rows = ([["agent", "AI implementation"], ["tutoring", "AI tutoring and help"], ["autocomplete", "Autocomplete"], ["architecture", "Architecture map"]] as const)
 		.map(([lane, label]) => ({ lane, label, status: budget[lane].status, text: `${label}: ${STATUS_TEXT[budget[lane].status]}` }));
 	return [...rows, { lane: "manual", label: "Editor, terminal, and tests", status: "unrestricted", text: "Editor, terminal, and tests: always available" }];

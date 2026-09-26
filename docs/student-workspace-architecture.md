@@ -1,6 +1,6 @@
-# Student workspace: journey coverage and state audit
+# Student workspace: identity, live snapshot and journey coverage
 
-The workspace uses one policy resolver, one execution-context authorization boundary, and one metadata event pipeline. `StudentWorkspaceContext` is a derived snapshot, not another store. Persistent learning progress still belongs to `WorkflowController` and its session snapshot. The remaining cross-process gaps below are explicit; the current implementation is not a single live store for every surface.
+The workspace uses one policy resolver, one execution-context authorization boundary, and one metadata event pipeline. Two things are derived from them and stored nowhere: `StudentWorkspaceContext` (scope-checked capabilities + UI state, used by Chat) and `StudentWorkspaceSnapshot` (the same plus learning progress, Learn, model, budget, actions and the Map's status, used by the GUI). Persistent learning progress still belongs to `WorkflowController` and its session file; generated maps belong to the workspace map store.
 
 ```mermaid
 flowchart TD
@@ -11,23 +11,28 @@ flowchart TD
     Execution --> Models[availableExecutionModels / selectExecutionModel / selectFallbackModel]
     Execution --> Capabilities[resolveStudentCapabilities]
     Models --> Capabilities
-    Budget[Session CapabilityState / host admission] --> Capabilities
-    Health[Observed provider and tool availability] --> Capabilities
+    Admission[Host model admission] --> Capabilities
+    Session[WorkspaceSessionState: Chat's budget, model health, Learn, progress] --> Capabilities
     Capabilities --> Effective[EffectiveStudentCapabilities]
-    Effective --> Workspace[StudentWorkspaceContext: derived scope + capabilities + UI]
-    Workspace --> Actions[resolveNextAvailableActions]
-    Actions --> Guidance[Chat guidance / GUI next steps]
+    Effective --> Workspace[StudentWorkspaceContext]
+    Workspace --> Snapshot[buildStudentWorkspaceSnapshot]
+    Session --> Snapshot
+    Saved[Saved workflow snapshot in the Pi session file] --> Snapshot
+    MapStore[Workspace map store + on-disk source digests] --> Snapshot
+    Snapshot --> GUI[/workspace-snapshot: progress, Map, actions/]
 
-    Controller[WorkflowController + persisted learning session] --> Chat[Chat / agent hooks / Learn / question]
-    Chat --> Events[Validated WorkspaceEventStream]
+    Controller[WorkflowController] --> Chat[Chat / agent hooks / Learn / question]
+    Chat -->|project + session events| Events[Validated WorkspaceEventStream]
     Editor[Editor / accepted autocomplete] --> Bridge[Loopback HTTP bridge]
     Terminal[Student terminal outcomes] --> Bridge
-    Map[Flowchart selection and generation] --> Bridge
-    Bridge --> Events
-    Events <--> Journal[Project + organization scoped metadata journal]
-    Events --> UI[Reduced WorkspaceUiState]
+    Map[Map selection and generation] --> Bridge
+    Bridge -->|project events only| Events
+    Events <--> Journal[Per-student-project metadata journal]
+    Events --> UI[Project WorkspaceUiState]
+    Events --> Session
     UI --> Workspace
-    UI --> Context[Chat context / current-work question context]
+    MapStore --> Context[Chat context / current-work question context]
+    UI --> Context
     Context --> Chat
 
     Execution --> Guards[Session and tool guards / admission / sandbox enforcement]
@@ -39,69 +44,76 @@ flowchart TD
 
 Manual editing, the student's own terminal, and viewing an existing map do not require AI permission. `terminal` in `EffectiveStudentCapabilities` means **agent** command execution. An organization restriction on agent terminal access must not disable the student's manual terminal.
 
-## Journey integration tests
+## Identity: project-scoped and session-scoped state
 
-`packages/paseo-adapter/test/student-journeys.test.ts` runs these scenarios through a real loopback HTTP server, temporary project files, disk-backed teacher selection, separate bridge/runtime event streams sharing a journal, actual subprocess verification, policy resolution, capability projection, workflow transitions, and Chat extension hooks.
+`WorkspaceEventScope` is `projectPath`, `projectId`, `organizationId`, `userId` and `sessionId`. The storage key (`workspaceEventKey`) is the **student project**: path, class project, organization and signed-in student. The session id is not part of the key; it selects which session's transient state a reader sees.
 
-| Journey | Verified outcome |
+| Scope | State | Where it lives | Who sees it |
+| --- | --- | --- | --- |
+| Student project | Project files, editor file/selection, recent changes by author, student and agent test results, terminal outcomes, Map (graph, staleness, selected step), project capability changes | Files on disk; project events in the journal; `WorkspaceMapStore` | Every Chat session and GUI surface of that student in that project |
+| Chat session | Learn setting as Chat used it, "since the previous AI turn" window (`chat.prompted`), selected model, model health, session budget exhaustion/warnings, learning progress, `/question` completions, pending tool calls | Session events (`SESSION_SCOPED_EVENTS`, stamped with the Pi session id); pending tool calls in memory only | Only surfaces following that conversation (`agentId` → Paseo registry → session id) |
+| Policy / security | Effective policy, identity, authorized project scope, sandbox, approved models, admission | `ExecutionContext`, resolved per request | Never taken from events or the GUI |
+
+Rules:
+
+- Two students on one machine, or two projects, never share a key. A signed-out (personal) workspace keeps the key it had before `userId` was added.
+- The GUI may only report project events from the editor, terminal and Map (`STUDENT_SURFACE_EVENTS`). Session events come only from the Chat process; the bridge emits Learn toggles for the conversation it resolved itself.
+- Journal replays drop a session id that is malformed or attached to a project event, rather than widening the event to every session.
+- When a Chat rebinds to another project, student or session, it forgets the previous record, pending tool calls, budget notices, model health and published progress. A tool result that arrives later is dropped.
+- A GUI request that names no registered conversation gets a session-less view: project state only, Learn off, no session budget or model observations.
+
+## Live workspace snapshot
+
+`buildStudentWorkspaceSnapshot` (`packages/runtime/src/workspace-snapshot.ts`) derives `StudentWorkspaceSnapshot` from:
+
+- `StudentWorkspaceContext`: scope, plus capabilities resolved from `ExecutionContext`, effective policy, the configured and approved model inventory, host admission signals, and the session's published budget and model signals (`sessionCapabilitySignals`).
+- Learning progress: the session's live `learning.progress` publication, else its last saved workflow snapshot (`readProjectProgress`), else the default stage. The `source` field says which.
+- Learn: what Chat last used, else the durable per-session setting.
+- The Map: `WorkspaceMapStore.status`, the authority for whether a map exists and is current.
+
+It contains the stage, goal, active plan step, verification, Learn scaffolding, effective capabilities, budget lanes, model availability, next actions and fallback guidance, the Map's status and selected step, the active file, recent changes, and the latest test outcome without its output excerpt. No host paths, file contents, prompts, command output or credentials. `revision` is a content hash.
+
+The bridge serves it at `GET /workspace-snapshot?workspaceId&agentId`, with `since=<revision>` for a bounded long-poll (the bridge re-derives it every second until it changes). `/workspace-actions` and `/project-progress` return subsets of the same snapshot, so the GUI cannot disagree with itself. The progress panel follows it live; the Map reads staleness and Learn from it.
+
+The snapshot is presentation. Session and tool guards, model admission, sandbox enforcement, completion path validation and model assertions still enforce independently at execution time; a stale or forged snapshot cannot authorize anything.
+
+## Map persistence
+
+`WorkspaceMapStore` (`packages/runtime/src/workspace-map-store.ts`) saves each generated chart with the content digests of its candidate sources under `<config>/workspace-maps/<student-project key>.json` (mode 0600, atomic rename).
+
+- It is written only after a successful generation, so a failed refresh keeps the last valid map.
+- Staleness is computed on read from the files on disk (changed, added or removed candidate sources), so it survives reloads, restarts and journal expiry. Candidate sources use one definition (`listFlowchartSources`) for generation and staleness.
+- The selected step is persisted from the GUI's `flowchart.node_selected`/`node_cleared` events and restored when it still exists after regeneration.
+- A file for another key, or a corrupted file, is ignored.
+- `GET /flowchart` reads the saved map without AI. `POST /flowchart` generates. The GUI opens the saved map first, offers the Map tab again after a reload or project switch, reopens it if it was open in that browser tab, and keeps the selection when the student leaves the project (closing the Map clears it).
+- Chat's context uses the same store for the Map's existence, staleness and selection.
+
+## Tests
+
+| Suite | What it proves |
 | --- | --- |
-| A | A generated map selection reaches Chat; an explicitly approved student plan advances to implementation; an agent edit changes a real file; verification passes; review sees agent authorship and map staleness. |
-| B | An actual manual edit fails verification; the next Chat prompt distinguishes agent/student authorship and includes a bounded failure summary; the following prompt does not repeat old activity. File contents do not enter the metadata context. |
-| C | A real session response limit blocks subsequent agent edits and removes tools from tutoring turns; guidance and policy-permitted completion remain available; the student accepts completion and passes verification manually. |
-| D | Observed lack of reliable tool support denies agent editing in the capability projection, recommends a manual workflow, and retains tutoring context. |
-| E | Learn propagates to the GUI scaffolding; a generated node resolves to source; selection and a real edit ground the current-work question prompt. |
-| F | Real organization/class/project policy merging feeds authorized context; GUI actions equal the workspace action projection; agent tools and completion enforce restrictions; tutoring, maps and manual surfaces remain available. |
-| G | Switching to another registered project isolates editor selection, events, tests and map state. Stale teacher selection fails authorization. A newly bound Chat has no previous project or AI context. |
-| H | A real completion-boundary failure makes map generation return a provider outage and useful manual next steps; existing map metadata survives, Chat emits fallback guidance, and manual edits and tests continue. |
+| `packages/paseo-adapter/test/browser-journey.test.ts` | System Chrome (via `playwright-core`) drives Pi Student's production Map, progress, editor-completion and terminal-activity scripts inside a Paseo-shaped shell with a real CodeMirror editor and xterm terminal, against the real bridge, journal, files and `npm test`. Journey: open A → generate Map → select node → Chat sees the node → workflow into implementation (progress follows live) → type a bug → failing test in the terminal → Chat sees the failure without raw output, secrets or host paths → fix → Map stale → switch to B (no A state) → B's Learn and outage stay in B → back to A (map, selection, staleness, progress restored) → reload and bridge restart (still restored, no AI call). Degraded AI: Chat outage reaches the progress panel, the saved map opens without AI, refresh fails but keeps it, editor and terminal work, recovery restores AI actions. |
+| `packages/paseo-adapter/test/workspace-snapshot.test.ts` | Two conversations in one project through the bridge: agent-budget exhaustion, model outage/recovery, Learn and progress stay per session. Progress restored from the saved session after the journal is gone. Long-poll. Session events cannot be reported by the GUI; snapshot redaction. Map through restarts, stale persistence, failed regeneration, no cross-project maps. Unapproved models on the completion path, snapshot model list and map generation; approved-but-unconfigured model reports `no_model`. |
+| `packages/runtime/test/workspace-sessions.test.ts` | Stream-level session isolation (shared project activity, separate Learn/prompt window/model/budget/progress), delayed tool results after a session switch and after a project switch, two students in one project, journal validation of session ids and stale entries, snapshot derivation (budget, outage, no model, redaction, revision, progress source), map store staleness/selection/isolation/corruption. |
+| `packages/paseo-adapter/test/student-journeys.test.ts` | Journeys A–H through the real bridge and Chat hooks (unchanged scenarios). |
 
-A ninth scenario checks that disconnected model credentials do not advertise AI actions. Additional runtime regressions cover delayed edit/test results after a scope switch and policy-only model fallback selection.
+Controlled boundaries: external model responses, authenticated identity/control-plane responses, the Pi extension dispatcher, and VM transport. The browser shell stands in for Paseo's own UI chrome (tabs, menu, chat transcript); Pi Student's parts of the page are its production scripts. These tests do not assert model answer quality or launch a Gondolin VM.
 
-Controlled boundaries: external model responses and model health, authenticated identity/control-plane responses, the Pi extension dispatcher, and VM transport. The filesystem, subprocess, HTTP server, event journal, policy/context/capability code, workflow controller, completion service and flowchart parsing/source mapping are real. These tests do not assert model answer quality, launch a Gondolin VM, or click through a browser. The existing UI contract tests remain useful for DOM/bundle hooks.
+Tests are hermetic: `tooling/vitest-hermetic.ts` gives every vitest run empty Pi and Pi Student homes and removes credential-like environment variables, so a developer's configured models cannot make a test pass locally that fails in CI. The browser journey needs Chrome or Chromium (`PI_STUDENT_TEST_BROWSER` overrides the path); it fails in CI without one and is skipped elsewhere.
 
-## Removed or consolidated paths
+## Remaining architectural debt
 
-- Removed `findFallbackModel` and its separate synchronous inventory/filter implementation. Sessions with and without a full execution context use `selectFallbackModel` and `availableExecutionModels`.
-- Removed the pass-through `normalizeFallbackThinkingLevel` adapter; fallback uses the shared `resolveThinkingLevel` directly.
-- Removed the REPL's direct `runtime.getAvailable()` inventory fallback. Its listing always uses the shared configured/approved inventory.
-- Removed unused `applyWorkspaceActivity`; snapshots consume the stream's reduced UI directly, and explicit UI updates retain the validated `updateWorkspaceUi` API.
-- Removed autocomplete's two inline `fileEditing` policy checks in favor of `resolveStudentCapabilities(...).autocomplete`. Path validation, environment enforcement and admission remain separate necessary security boundaries.
-- Removed the now-unused editor `executedModel` cache left behind by the simplified completion label.
-- Removed the extra cached Learn boolean in workspace activity; the controller supplies the setting and the event projection determines whether a broadcast is needed.
-- GUI action resolution now builds a scope-checked `StudentWorkspaceContext` and consults the same configured model inventory used by execution. It no longer advertises AI solely from policy defaults.
-- Admission display signals are keyed by the common project/organization workspace key instead of only the filesystem root.
-- Flowchart generation flushes its metadata event before responding, so a subsequent Chat turn can observe it without racing the journal writer.
-- Pending agent tool results and budget-notification deduplication are cleared when scope changes. A completion originating in the old project cannot become an edit/test event in the newly bound project.
-
-No old project selector was removed without a replacement: the `projectName` Flowchart route still serves the pre-workspace project screen. Paseo bundle patches still connect its editor, terminal and navigation to our events; deleting them would disconnect those surfaces. The pre-existing project-progress work was preserved.
-
-## Remaining architectural debt and disconnected UX state
-
-| Area | Current dependency and student impact | Needed follow-up |
+| Area | State after this change | Needed follow-up |
 | --- | --- | --- |
-| Budget display | Chat has live `CapabilityState` counters; the GUI has admission observations, but does not consume Chat's live session counters. After a session-only agent limit, Chat enforces tutoring while GUI action/budget labels can lag. Journey C verifies runtime enforcement and continued manual/completion use, not synchronized GUI counters. | Publish a session-addressed capability/budget snapshot; retain admission as authoritative enforcement. |
-| Model health | Provider/tool availability is an observation supplied to the capability resolver. Failures produce fallback guidance, but a weak-model observation is not automatically persisted or distributed to every surface, and the tool guard has no shared model-health input. | Connect model metadata/failure observations to a session-scoped health source and enforcement. |
-| Learn | The durable setting is project/session scoped; the event journal's Learn projection is project scoped. Multiple Chat sessions in one project can display different settings until synchronization. | Carry active session identity through GUI subscriptions and workspace state. |
-| Teacher selection | `teacher-context.json` holds one active binding. Opening another workspace before reselecting correctly fails closed, but does not restore that workspace's classroom binding automatically. | Persist authorized bindings per workspace and revalidate on activation. |
-| Flowchart | The graph/layout is browser-owned; only generation/staleness/selection metadata enters the journal. An open map survives generation failure, but reload/reconnect persistence is not guaranteed by the workspace snapshot. Pre-workspace `projectName` navigation is still separate. | Persist graph artifacts keyed by authorized workspace and unify navigation once a workspace can be resolved there. |
-| Editor | The actual document, selection and undo stack live in Paseo/CodeMirror; events provide bounded awareness. Completion preferences use browser storage rather than the workspace snapshot. | Keep the editor's document authority, but add browser-level navigation/reconnect tests and scope completion preferences where needed. |
-| Event transport | Scope keys include path/project/organization, not user/session. Journal refresh is pull-based and compaction is best effort across processes. | Define multi-session/user isolation and durable ordering/compaction before relying on the journal for authoritative state. |
-| Learning progress | The GUI progress reader validates and reads the persisted workflow snapshot; it is not a live controller subscription. | A session-addressed subscription would remove polling lag without adding another progress store. |
-| Enforcement vs presentation | Low-level session/tool guards still enforce policy, argument safety, admission and sandbox constraints independently of presentation capabilities. The capability projection does not yet include every environment-readiness condition enforced by the request path. | Factor shared permission decisions only where semantics match; keep enforcement at execution boundaries. |
-
-These gaps are not covered up with additional fallback implementations. Replacing their current stores requires explicit multi-session and browser lifecycle work.
+| Transport | Snapshot "subscription" is a bounded long-poll over a pull-based journal refresh, re-derived every second per waiting request. Journal compaction is still best effort across processes. | A push channel from the journal (file watch or local socket) and durable ordering before relying on the journal for anything authoritative. |
+| Model health enforcement | Chat publishes provider availability; every surface shows it. The tool guard and completion path still learn about failures only from their own requests. Reliable tool-use is not yet observed automatically. | Feed a session-scoped health observation into the guards where semantics match; detect tool-use unreliability from model metadata. |
+| Budget | Session exhaustion is published when Chat's `message_end` sees it; "low" warnings reach the GUI only via admission or explicit `budget.warning`. | Publish session counters' warning thresholds if students need earlier notice. |
+| Teacher selection | `teacher-context.json` still holds one active binding; opening another workspace fails closed but does not restore that workspace's binding. | Persist authorized bindings per workspace and revalidate on activation. |
+| Identity on the bridge | The bridge resolves the signed-in student with a 10 s cache; if the classroom backend is unreachable it uses a personal key, so Chat and GUI activity temporarily separate (fails closed). | Share the resolved identity between the Chat and bridge processes. |
+| Editor | The document, selection and undo stack stay in Paseo/CodeMirror; completion preferences use browser storage. | Scope completion preferences to the workspace if they should roam. |
+| Pre-workspace Map | The `projectName` route (new-workspace screen) uses the same store and key, but the GUI does not restore a selection there. | Unify once a workspace can be resolved on that screen. |
+| Enforcement vs presentation | Kept separate on purpose: presentation uses `resolveStudentCapabilities` and the snapshot; enforcement stays at execution boundaries. Some environment-readiness conditions are enforced by the request path but not projected. | Project them where semantics match; do not merge enforcement into the projection. |
 
 ## Validation
 
-Final checks on 2026-09-26:
-
-| Command | Result |
-| --- | --- |
-| `npm run build` | PASS — 20/20 tasks (18 unchanged tasks cached). |
-| `npm run typecheck` | PASS — 35/35 tasks including dependency builds (33 cached). |
-| `npm test` | PASS — 520 package tests across 89 files, plus 5 architecture checks; 39/39 Turbo tasks (37 cached). |
-| New journey suite | PASS — 9/9, covering A–H and absent configured models. |
-| `git diff --check` | PASS. |
-
-The first full test run exposed two stale UI contract assertions in the pre-existing editor/shell changes. They now assert the current completion text and shell version; no production UI was reverted.
-
-Turbo reused passing results for unchanged packages. The affected runtime, adapter and client suites ran during validation. The root `npm test` command includes architecture checks and package test suites; separately invoked database (`npm run infra:test`) and live VM (`npm run test:sandbox`) smoke suites were not run. No browser click-through or external AI service was required for these integration tests.
+See the change summary for commands and results. Database tests were run against a local Postgres 15 with pgTAP and a Supabase auth/role shim that mirrors what the migrations and tests use; the real Supabase image is only exercised in the `supabase / rls` CI job.

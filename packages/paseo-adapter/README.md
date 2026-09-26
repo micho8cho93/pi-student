@@ -48,8 +48,25 @@ which file was opened, edited, or selected, and when an AI suggestion was
 accepted — to the bridge's `/workspace-events` endpoint; it never sends file
 contents. The chat runtime records its own file edits, commands, and test
 results. Both processes share a bounded, per-workspace journal under the Pi
-Student config directory, keyed by project path and class project, so events
-never cross workspaces. Chat receives a short summary at each prompt (files
+Student config directory, keyed by project path, class project and signed-in
+student, so events never cross workspaces or students. Session-scoped events
+(Learn, prompts, model health, budget, learning progress) also carry the Pi
+session id and are visible only to that conversation's surfaces.
+
+`GET /workspace-snapshot?workspaceId=…&agentId=…` returns the current
+`StudentWorkspaceSnapshot` for that project and conversation: stage, goal,
+active plan step, verification, Learn, effective capabilities, budget lanes,
+model availability, next actions, the Map's status and recent changes. It is
+derived on each request and stores nothing. With `&since=<revision>` it waits
+(up to 25 s) until something changes, which the progress panel uses to follow
+the workspace live. `/workspace-actions` and `/project-progress` return subsets
+of the same snapshot.
+
+Generated maps are saved per student project (`<config>/workspace-maps/`),
+only after a successful generation. `GET /flowchart` returns the saved map and
+its status without AI; staleness is computed from source digests on disk, so it
+survives reloads and restarts, and the selected step is restored. `POST
+/flowchart` regenerates; a failure leaves the saved map in place. Chat receives a short summary at each prompt (files
 the student changed vs. files the assistant changed, the latest test result
 with a few redacted failing lines, and whether the flowchart is out of date).
 Credential-like paths are excluded from that summary. The Flowchart tab shows

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(15);
+select plan(16);
 
 insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data) values
   ('b1000000-0000-0000-0000-000000000001','authenticated','authenticated','controls-teacher@example.test','{}','{}'),
@@ -38,16 +38,20 @@ select ok(position('mcp.example.test' in public.teacher_extension_catalog('b3000
   'catalog does not expose an MCP endpoint');
 select throws_ok($$ select public.set_teacher_extension_enabled('b3000000-0000-0000-0000-000000000001',null,'skill','b5000000-0000-0000-0000-000000000002',false) $$,
   '42501','Extension unavailable for this target','project-only skill cannot be changed for entire class');
+-- Teacher controls are blocks (20260925172714): approved extensions reach the
+-- student environment until a teacher blocks them for a class or project.
 select results_eq($$ select jsonb_array_length(public.resolve_institutional_environment('b4000000-0000-0000-0000-000000000001')->'skills') $$,
-  $$ values (0) $$, 'organization approval alone does not expose a skill');
-select lives_ok($$ select public.set_teacher_extension_enabled('b3000000-0000-0000-0000-000000000001',null,'skill','b5000000-0000-0000-0000-000000000001',true) $$,
-  'teacher grants an approved skill to the class');
+  $$ values (2) $$, 'approved organization and project skills are available by default');
+select lives_ok($$ select public.set_teacher_extension_enabled('b3000000-0000-0000-0000-000000000001',null,'skill','b5000000-0000-0000-0000-000000000001',false) $$,
+  'teacher blocks an approved skill for the class');
 select lives_ok($$ select public.set_teacher_extension_enabled('b3000000-0000-0000-0000-000000000001','b4000000-0000-0000-0000-000000000001','mcp','b6000000-0000-0000-0000-000000000001',false) $$,
   'teacher can block an approved MCP for one project');
 select results_eq($$ select jsonb_array_length(public.resolve_institutional_environment('b4000000-0000-0000-0000-000000000001')->'skills') $$,
-  $$ values (1) $$, 'class grant exposes approved skill to student environment');
-select lives_ok($$ select public.set_teacher_extension_enabled('b3000000-0000-0000-0000-000000000001',null,'skill','b5000000-0000-0000-0000-000000000001',false) $$,
-  'teacher can revoke the class skill grant');
+  $$ values (1) $$, 'class block removes the skill from the student environment');
+select lives_ok($$ select public.set_teacher_extension_enabled('b3000000-0000-0000-0000-000000000001',null,'skill','b5000000-0000-0000-0000-000000000001',true) $$,
+  'teacher can lift the class skill block');
+select results_eq($$ select jsonb_array_length(public.resolve_institutional_environment('b4000000-0000-0000-0000-000000000001')->'skills') $$,
+  $$ values (2) $$, 'lifting the block restores the skill');
 select results_eq($$ select jsonb_array_length(public.resolve_institutional_environment('b4000000-0000-0000-0000-000000000001')->'mcps') $$,
   $$ values (0) $$, 'project block removes MCP from student environment');
 select results_eq($$ select (public.teacher_usage_summary('b3000000-0000-0000-0000-000000000001',null,current_date)->>'tokens')::integer $$,

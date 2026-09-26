@@ -15,7 +15,7 @@ import { createModelRuntime } from "@pi-student/runtime/model-runtime";
 import { persistApiKey } from "@pi-student/runtime/auth-storage";
 import { DEFAULT_OLLAMA_URL, OLLAMA_PROVIDER_ID, readOllamaConfig, registerOllama, saveOllamaUrl } from "@pi-student/runtime/ollama";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { FlowchartModelError, generateFlowchart } from "./flowchart.js";
+import { FlowchartModelError, generateFlowchart, type Flowchart } from "./flowchart.js";
 import { CompletionError, EditorCompletionService, type CompletionRequest, type ModelExecutionEnvironment } from "./editor-completion.js";
 import { availableExecutionModels } from "@pi-student/runtime/model-selection";
 import { providerCatalog } from "@pi-student/shared/provider-catalog";
@@ -40,13 +40,24 @@ import type { ExecutionContext, ModelAdmissionGate } from "@pi-student/contracts
 import { assertExecutionEnvironment, authorizeExtension } from "@pi-student/runtime/extension-authorization";
 import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, studentEventSurface, TEST_COMMAND, workspaceEventKey, WorkspaceEventJournal, WorkspaceEventStream,
 	type WorkspaceEventScope } from "@pi-student/runtime/workspace-events";
-import { describeAssistanceFallback, resolveNextAvailableActions } from "@pi-student/runtime/assistance";
 import { createStudentWorkspace, resolveStudentCapabilities, unavailableStudentCapabilities, type StudentCapabilityInputs } from "@pi-student/runtime/student-workspace";
-import { describeWorkspaceBudget } from "@pi-student/runtime/workspace-budget";
+import { buildStudentWorkspaceSnapshot, sessionCapabilitySignals } from "@pi-student/runtime/workspace-snapshot";
+import { WorkspaceMapStore } from "@pi-student/runtime/workspace-map-store";
+import type { StudentWorkspaceSnapshot, WorkspaceMapStatus } from "@pi-student/contracts";
 import { readProjectProgress } from "./project-progress.js";
 
 export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
+const NO_MAP: WorkspaceMapStatus = { available: false, stale: false, staleFiles: [] };
+
+export interface EcosystemBridgeOptions {
+	resolveModelExecution?: (root: string) => Promise<ModelExecutionEnvironment>;
+	/** The signed-in student. Keys workspace activity and maps so students sharing a machine never see each other's. */
+	resolveIdentity?: () => Promise<{ userId?: string }>;
+	mapStore?: WorkspaceMapStore;
+	/** Origin of the Paseo GUI allowed to call the bridge. Only tests serve the GUI elsewhere. */
+	guiOrigin?: string;
+}
 
 export async function runEcosystemBridge(
 	port = ECOSYSTEM_BRIDGE_PORT,
@@ -61,17 +72,27 @@ export async function runEcosystemBridge(
 	process.stdout.write(`Pi Student ecosystem bridge listening on http://127.0.0.1:${port}\n`);
 }
 
-export function createEcosystemBridgeServer(projectPath: string, paseoHome?: string,
-	options: { resolveModelExecution?: (root: string) => Promise<ModelExecutionEnvironment> } = {}) {
+export function createEcosystemBridgeServer(projectPath: string, paseoHome?: string, options: EcosystemBridgeOptions = {}) {
+	const guiOrigin = options.guiOrigin ?? GUI_ORIGIN;
+	const mapStore = options.mapStore ?? new WorkspaceMapStore();
 	let signIn: GitHubSignInProgress | undefined;
 	let connecting: Promise<void> | undefined;
 	const github = new GhGitHubClient(undefined, progress => { signIn = progress; });
 	const activity = new Map<string, { progress?: PublishProgress; publishing: boolean }>();
-	const flowchartJobs = new Map<string, Promise<Awaited<ReturnType<typeof generateFlowchart>>>>();
+	const flowchartJobs = new Map<string, Promise<Flowchart>>();
 	// Shared with the chat runtime through the local journal; metadata only.
 	const eventJournal = new WorkspaceEventJournal();
 	const workspaceEvents = new WorkspaceEventStream({ journal: eventJournal });
-	const eventScope = async (root: string) => resolveWorkspaceEventScope(root, await readTeacherContext().catch(() => ({})));
+	const resolveIdentity = options.resolveIdentity ?? defaultIdentity();
+	/**
+	 * Project scope for the signed-in student, plus the Chat session behind `agentId`
+	 * when the GUI names one. The session is resolved from Paseo's agent registry,
+	 * never accepted from the browser; an unknown agent yields a session-less view.
+	 */
+	const eventScope = async (root: string, workspaceId?: string | null, agentId?: string | null) => {
+		const sessionId = workspaceId && agentId ? await resolveLearnSession(paseoHome, root, workspaceId, agentId).catch(() => undefined) : undefined;
+		return resolveWorkspaceEventScope(root, await readTeacherContext().catch(() => ({})), { ...await resolveIdentity().catch(() => ({})), ...(sessionId ? { sessionId } : {}) });
+	};
 	let providerRuntime: ModelRuntime | undefined;
 	let codexLogin: { status: string; message?: string; url?: string; code?: string; prompt?: { type: string; message: string; options?: ReadonlyArray<{ id: string; label: string; description?: string }> }; answer?: (value: string) => void; error?: string } | undefined;
 	let supabaseLogin: { state: string; userId: string; startedAt: number } | undefined;
@@ -120,25 +141,46 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 		return { runtime, context: executionContext, beforeRequest };
 	});
 	const completions = new EditorCompletionService(resolveModelExecution);
-	/** Deterministic next actions for the GUI. Failing to resolve AI access never hides manual workflows. */
-	const workspaceActions = async (root: string, scope: WorkspaceEventScope, observed: Pick<StudentCapabilityInputs, "model"> = {}) => {
+	/**
+	 * The one live StudentWorkspaceSnapshot for a GUI request. Every GUI answer about
+	 * capabilities, budget, model, progress, Learn and the map comes from here, so
+	 * surfaces cannot disagree. Failing to resolve AI access never hides manual workflows.
+	 */
+	/** Authorized context and approved, configured models: the expensive (control-plane) inputs of a snapshot. */
+	const resolveAccess = (root: string): Promise<{ context: ExecutionContext; models: string[] } | { error: unknown }> => resolveModelExecution(root)
+		.then(async ({ runtime, context }) => ({ context, models: (await availableExecutionModels(runtime, context)).map(model => `${model.provider}/${model.id}`) }), error => ({ error }));
+	const workspaceSnapshot = async (root: string, scope: WorkspaceEventScope, request: { workspaceId?: string | null; agentId?: string | null } = {},
+		observed: Pick<StudentCapabilityInputs, "model"> = {}, access = resolveAccess(root)): Promise<StudentWorkspaceSnapshot> => {
+		await workspaceEvents.refresh(scope).catch(() => {});
 		const ui = workspaceEvents.ui(scope);
-		const workspace = await resolveModelExecution(root)
-			.then(async ({ runtime, context }) => createStudentWorkspace(context, { claimed: scope, ui,
-				capabilities: resolveStudentCapabilities(context, { ...admissionSignals.get(workspaceEventKey(scope)), ...observed,
-					models: (await availableExecutionModels(runtime, context)).map(model => `${model.provider}/${model.id}`) }) }))
-			.catch(error => ({ ui, capabilities: unavailableStudentCapabilities(safeError(error), error instanceof CompletionError && error.status === 403 ? "budget_exhausted" : "provider_unavailable") }));
-		const { capabilities } = workspace;
-		const actions = resolveNextAvailableActions(workspace);
-		return { actions, fallback: describeAssistanceFallback(actions), budget: describeWorkspaceBudget(capabilities.budget), managed: !!capabilities.projectId };
+		const session = workspaceEvents.session(scope);
+		const { sessionId: _session, ...project } = scope;
+		const resolved = await access;
+		const workspace = await Promise.resolve().then(() => {
+			if ("error" in resolved) throw resolved.error;
+			return createStudentWorkspace(resolved.context, { claimed: project, ui, capabilities: resolveStudentCapabilities(resolved.context,
+				{ ...admissionSignals.get(workspaceEventKey(scope)), ...sessionCapabilitySignals(session), ...observed, models: resolved.models }) });
+		}).catch(error => ({ ui, capabilities: unavailableStudentCapabilities(safeError(error), error instanceof CompletionError && error.status === 403 ? "budget_exhausted" : "provider_unavailable") }));
+		const [map, savedProgress, learnSetting] = await Promise.all([
+			mapStore.status(scope).catch(() => NO_MAP),
+			scope.sessionId ? readProjectProgress(paseoHome, root, request.workspaceId ?? null, request.agentId ?? null).catch(() => null) : null,
+			scope.sessionId ? new LearnSettingsStore().read(root, scope.sessionId).catch(() => undefined) : undefined,
+		]);
+		return buildStudentWorkspaceSnapshot({ workspace: { ...workspace, scope: { ...("scope" in workspace ? workspace.scope : { projectPath: scope.projectPath }), sessionId: scope.sessionId } },
+			session, savedProgress, learnSetting, map });
+	};
+	const workspaceActions = async (root: string, scope: WorkspaceEventScope, request: { workspaceId?: string | null; agentId?: string | null } = {},
+		observed: Pick<StudentCapabilityInputs, "model"> = {}) => {
+		const snapshot = await workspaceSnapshot(root, scope, request, observed);
+		return { actions: snapshot.actions, fallback: snapshot.fallback, budget: snapshot.budget, managed: snapshot.scope.managed };
 	};
 	const requireApprovedProvider = async (providerId: string) => {
 		const approved = await approvedProvidersForCurrentProject();
 		if (approved && !approved.includes(providerId)) throw new Error("This model provider is not approved for the selected class project.");
 	};
 	return createServer(async (request, response) => {
-		setSecurityHeaders(response);
-		if (!allowRequest(request, response)) return;
+		setSecurityHeaders(response, guiOrigin);
+		if (!allowRequest(request, response, guiOrigin)) return;
 		if (request.method === "OPTIONS") { response.writeHead(204); response.end(); return; }
 		try {
 			const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -174,6 +216,9 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				try {
 					const scope = await eventScope(root);
 					const event = workspaceEvents.emit(scope, source, body, STUDENT_SURFACE_EVENTS);
+					// The selected step is restored with the persisted map after a reload.
+					if (event.type === "flowchart.node_selected") await mapStore.select(scope, event.id).catch(() => {});
+					if (event.type === "flowchart.node_cleared") await mapStore.select(scope, undefined).catch(() => {});
 					// Test outcomes are derived here from the student's command; the GUI cannot report them directly.
 					if (event.type === "terminal.command_finished" && TEST_COMMAND.test(event.command) && event.exitCode !== undefined) {
 						workspaceEvents.emit(scope, "terminal", event.exitCode === 0
@@ -186,7 +231,8 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			}
 			if (request.method === "GET" && url.pathname === "/workspace-activity") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
-				const scope = await eventScope(await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath));
+				const workspaceId = url.searchParams.get("workspaceId")!;
+				const scope = await eventScope(await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath), workspaceId, url.searchParams.get("agentId"));
 				await workspaceEvents.refresh(scope);
 				const latest = workspaceEvents.events(scope).filter(event => event.type === "capability.changed").at(-1);
 				const ui = workspaceEvents.ui(scope);
@@ -195,18 +241,43 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			}
 			if (request.method === "GET" && url.pathname === "/workspace-actions") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
-				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
-				const scope = await eventScope(root);
-				await workspaceEvents.refresh(scope);
-				return json(response, 200, await workspaceActions(root, scope, url.searchParams.get("model") === "unavailable" ? { model: { available: false } } : {}));
+				const workspaceId = url.searchParams.get("workspaceId")!, agentId = url.searchParams.get("agentId");
+				const root = await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath);
+				const scope = await eventScope(root, workspaceId, agentId);
+				return json(response, 200, await workspaceActions(root, scope, { workspaceId, agentId }, url.searchParams.get("model") === "unavailable" ? { model: { available: false } } : {}));
+			}
+			if (request.method === "GET" && url.pathname === "/workspace-snapshot") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const workspaceId = url.searchParams.get("workspaceId")!, agentId = url.searchParams.get("agentId");
+				const root = await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath);
+				const scope = await eventScope(root, workspaceId, agentId);
+				// ?since=<revision> waits (bounded) until something the surfaces show changes, so the GUI can follow the workspace live.
+				const since = url.searchParams.get("since");
+				const deadline = Date.now() + Math.min(Math.max(Number(url.searchParams.get("wait") ?? 15_000) || 0, 0), 25_000);
+				let closed = false;
+				response.once("close", () => { closed = true; });
+				// Workspace events and the map are re-read every second; authorization and model inventory every few seconds.
+				let access = { at: Date.now(), value: resolveAccess(root) };
+				const currentAccess = () => {
+					if (Date.now() - access.at >= SNAPSHOT_ACCESS_MS) access = { at: Date.now(), value: resolveAccess(root) };
+					return access.value;
+				};
+				let snapshot = await workspaceSnapshot(root, scope, { workspaceId, agentId }, {}, currentAccess());
+				while (since && snapshot.revision === since && Date.now() < deadline && !closed) {
+					await new Promise(resolve => setTimeout(resolve, SNAPSHOT_POLL_MS));
+					snapshot = await workspaceSnapshot(root, scope, { workspaceId, agentId }, {}, currentAccess());
+				}
+				if (closed) return;
+				return json(response, 200, snapshot);
 			}
 			if (request.method === "GET" && url.pathname === "/project-progress") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
-				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
-				const progress = await readProjectProgress(paseoHome, root, url.searchParams.get("workspaceId"), url.searchParams.get("agentId"));
-				const scope = await eventScope(root);
-				await workspaceEvents.refresh(scope);
-				return json(response, 200, { progress, activeFile: workspaceEvents.ui(scope).activeFile, ...(await workspaceActions(root, scope)) });
+				const workspaceId = url.searchParams.get("workspaceId")!, agentId = url.searchParams.get("agentId");
+				const root = await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath);
+				const snapshot = await workspaceSnapshot(root, await eventScope(root, workspaceId, agentId), { workspaceId, agentId });
+				const { source, ...progress } = snapshot.learning;
+				return json(response, 200, { progress: source === "default" ? null : { ...progress, source }, activeFile: snapshot.activity.activeFile,
+					actions: snapshot.actions, fallback: snapshot.fallback, budget: snapshot.budget, managed: snapshot.scope.managed });
 			}
 			if (["GET", "POST"].includes(request.method ?? "") && url.pathname === "/learn-mode") {
 				const workspaceId = url.searchParams.get("workspaceId");
@@ -219,7 +290,9 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 					await settings.write(activeProject, sessionId, body.learnMode);
 					// Mirror the toggle into this project's workspace only. Learn is scaffolding, so capabilities are untouched.
 					try {
-						workspaceEvents.emit(await eventScope(activeProject), "learn", { type: body.learnMode ? "learn.enabled" : "learn.disabled" });
+						// Learn is session state: only this conversation's surfaces follow the toggle.
+						const scope = await eventScope(activeProject);
+						workspaceEvents.emit({ ...scope, sessionId }, "learn", { type: body.learnMode ? "learn.enabled" : "learn.disabled" });
 						await eventJournal.flush();
 					} catch { /* Activity is best-effort; the setting itself is saved. */ }
 				}
@@ -231,32 +304,41 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				const state = await readEcosystemState(activeProject, github);
 				return json(response, 200, { ...state, ...currentActivity, environment: await resolvePaseoEnvironmentState(activeProject, resolveModelExecution) });
 			}
-			if (request.method === "POST" && url.pathname === "/flowchart") {
+			if (url.pathname === "/flowchart" && ["GET", "POST"].includes(request.method ?? "")) {
 				const workspaceId = url.searchParams.get("workspaceId");
 				const projectName = url.searchParams.get("projectName");
 				if (!workspaceId && !projectName) return json(response, 400, { error: "Choose a project before generating a flowchart." });
 				const activeProject = workspaceId
 					? await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath)
 					: await resolvePaseoProjectPath(paseoHome, projectName!);
-				let job = flowchartJobs.get(activeProject);
+				const scope = await eventScope(activeProject);
+				// Viewing the saved map reads only local files; it never needs AI or a network.
+				if (request.method === "GET") {
+					const stored = await mapStore.read<Flowchart>(scope).catch(() => undefined);
+					return json(response, 200, { chart: stored?.chart ?? null, map: await mapStore.status(scope).catch(() => NO_MAP) });
+				}
+				const key = workspaceEventKey(scope);
+				let job = flowchartJobs.get(key);
 				if (!job) {
 					job = resolveModelExecution(activeProject).then(({ runtime, context, beforeRequest }) =>
-						generateFlowchart(activeProject, runtime, context, beforeRequest)).then(async chart => {
-						const scope = await eventScope(activeProject);
+						generateFlowchart(activeProject, runtime, context, beforeRequest)).then(async ({ sources, ...chart }) => {
+						// Saved only after a successful generation, so a failed refresh keeps the last valid map.
+						await mapStore.save(scope, chart, sources);
 						await workspaceEvents.refresh(scope).catch(() => {});
 						workspaceEvents.emit(scope, "flowchart", { type: "flowchart.generated", filesRead: chart.filesRead, ...(chart.model ? { model: chart.model } : {}) });
 						await eventJournal.flush();
 						return chart;
 					});
-					flowchartJobs.set(activeProject, job);
-					void job.finally(() => { if (flowchartJobs.get(activeProject) === job) flowchartJobs.delete(activeProject); }).catch(() => {});
+					flowchartJobs.set(key, job);
+					void job.finally(() => { if (flowchartJobs.get(key) === job) flowchartJobs.delete(key); }).catch(() => {});
 				}
 				try { return json(response, 200, await job); }
 				catch (error) {
 					// Say what still works (an existing map, editing, terminal) instead of only reporting the failure.
 					const observed = error instanceof FlowchartModelError ? { model: { available: false } } : {};
 					const status = error instanceof CompletionError ? error.status : error instanceof FlowchartModelError ? 502 : 500;
-					return json(response, status, { error: safeError(error), ...await workspaceActions(activeProject, await eventScope(activeProject), observed) });
+					return json(response, status, { error: safeError(error), map: await mapStore.status(scope).catch(() => NO_MAP),
+						...await workspaceActions(activeProject, scope, {}, observed) });
 				}
 			}
 			if (request.method === "GET" && url.pathname === "/providers") {
@@ -450,15 +532,32 @@ export async function resolvePaseoProjectPath(paseoHome: string | undefined, pro
 	return path.resolve(matches[0].rootPath as string);
 }
 
-function allowRequest(request: IncomingMessage, response: ServerResponse): boolean {
+const SNAPSHOT_POLL_MS = 1_000;
+const SNAPSHOT_ACCESS_MS = 5_000;
+
+/** Signed-in student from the classroom backend; signed-out or unreachable yields a personal (user-less) scope. Cached briefly. */
+function defaultIdentity(): () => Promise<{ userId?: string }> {
+	let cached: { at: number; value: Promise<{ userId?: string }> } | undefined;
+	return () => {
+		if (cached && Date.now() - cached.at < 10_000) return cached.value;
+		const config = readSupabaseConfig();
+		const value = config
+			? new SupabaseIdentityProvider(createPiSupabaseClient(config), "student").getIdentity().then(identity => identity.userId ? { userId: identity.userId } : {}, () => ({}))
+			: Promise.resolve({});
+		cached = { at: Date.now(), value };
+		return value;
+	};
+}
+
+function allowRequest(request: IncomingMessage, response: ServerResponse, guiOrigin: string): boolean {
 	const origin = request.headers.origin;
-	if (origin && origin !== GUI_ORIGIN) { json(response, 403, { error: "Origin not allowed" }); return false; }
+	if (origin && origin !== guiOrigin) { json(response, 403, { error: "Origin not allowed" }); return false; }
 	if (request.method === "POST" && request.headers["x-pi-student"] !== "ecosystem") { json(response, 403, { error: "Missing Pi Student request header" }); return false; }
 	return true;
 }
 
-function setSecurityHeaders(response: ServerResponse): void {
-	response.setHeader("Access-Control-Allow-Origin", GUI_ORIGIN);
+function setSecurityHeaders(response: ServerResponse, guiOrigin: string): void {
+	response.setHeader("Access-Control-Allow-Origin", guiOrigin);
 	response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 	response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Pi-Student");
 	response.setHeader("Cache-Control", "no-store");

@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ExecutionContext, FlowchartSourceRef, ModelAdmissionGate } from "@pi-student/contracts";
@@ -6,7 +6,7 @@ import { isSensitiveContextPath } from "@pi-student/shared/file-context";
 import { selectExecutionModel } from "@pi-student/runtime/model-selection";
 import { assertExecutionEnvironment } from "@pi-student/runtime/extension-authorization";
 import { allowedReasoningLevels } from "@pi-student/policy/capability-policy";
-import { FLOWCHART_EXCLUDED_NAME, FLOWCHART_IGNORED_DIRECTORIES, FLOWCHART_IMPORTANT_NAME, FLOWCHART_SOURCE_EXTENSION } from "@pi-student/runtime/workspace-events";
+import { digestSource, flowchartSourceDigests, listFlowchartSources, MAX_FLOWCHART_SOURCES } from "@pi-student/runtime/workspace-map-store";
 
 export type FlowchartNodeType = "start" | "end" | "decision" | "action" | "input" | "output" | "module" | "data";
 /**
@@ -18,31 +18,17 @@ export type FlowchartNodeType = "start" | "end" | "decision" | "action" | "input
 export interface FlowchartNode extends FlowchartSourceRef { id: string; label: string; detail?: string; explanation?: string; type?: FlowchartNodeType }
 export interface FlowchartEdge { from: string; to: string; label?: string }
 export interface Flowchart { title: string; summary: string; nodes: FlowchartNode[]; edges: FlowchartEdge[]; generatedAt: string; filesRead: number; truncated: boolean; model?: string }
+/** A generated chart plus the digests of the sources it was generated from, for staleness checks. Digests stay on the host. */
+export type GeneratedFlowchart = Flowchart & { sources: Record<string, string> };
 
-const ignoredDirectories = FLOWCHART_IGNORED_DIRECTORIES;
-const sourceExtension = FLOWCHART_SOURCE_EXTENSION;
-const importantName = FLOWCHART_IMPORTANT_NAME;
-const MAX_FILES = 100;
+const MAX_FILES = MAX_FLOWCHART_SOURCES;
 const MAX_FILE_CHARS = 7_000;
 const MAX_TOTAL_CHARS = 110_000;
 
-export async function collectFlowchartSource(root: string): Promise<{ text: string; filesRead: number; truncated: boolean; files: string[] }> {
-	const files: string[] = [];
-	const visit = async (directory: string, depth: number): Promise<void> => {
-		if (depth > 7 || files.length >= MAX_FILES + 1) return;
-		let entries;
-		try { entries = await readdir(directory, { withFileTypes: true }); }
-		catch { return; }
-		for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-			if (entry.name.startsWith(".") || isSensitiveContextPath(path.join(directory, entry.name)) || FLOWCHART_EXCLUDED_NAME.test(entry.name)) continue;
-			const full = path.join(directory, entry.name);
-			if (entry.isDirectory()) {
-				if (!ignoredDirectories.has(entry.name)) await visit(full, depth + 1);
-			} else if (entry.isFile() && (sourceExtension.test(entry.name) || importantName.test(entry.name))) files.push(full);
-			if (files.length >= MAX_FILES + 1) break;
-		}
-	};
-	await visit(root, 0);
+export async function collectFlowchartSource(root: string): Promise<{ text: string; filesRead: number; truncated: boolean; files: string[]; digests: Record<string, string> }> {
+	const files = await listFlowchartSources(root);
+	// Digests of every candidate, including ones too large to excerpt, taken from the content that was read.
+	const digests = await flowchartSourceDigests(root);
 	let text = "";
 	let filesRead = 0;
 	const read: string[] = [];
@@ -52,9 +38,11 @@ export async function collectFlowchartSource(root: string): Promise<{ text: stri
 		try {
 			const size = (await stat(file)).size;
 			if (size > 250_000) { truncated = true; continue; }
-			const raw = await readFile(file, "utf8");
+			const bytes = await readFile(file);
+			const raw = bytes.toString("utf8");
 			if (raw.includes("\0")) continue;
 			const relative = path.relative(root, file).split(path.sep).join("/");
+			digests[relative] = digestSource(bytes);
 			const excerpt = raw.slice(0, Math.min(MAX_FILE_CHARS, MAX_TOTAL_CHARS - text.length));
 			text += `\n\n--- ${relative} ---\n${excerpt}`;
 			filesRead++;
@@ -62,7 +50,7 @@ export async function collectFlowchartSource(root: string): Promise<{ text: stri
 			if (excerpt.length < raw.length) truncated = true;
 		} catch { /* Ignore files that changed or are unreadable during the scan. */ }
 	}
-	return { text, filesRead, truncated, files: read };
+	return { text, filesRead, truncated, files: read, digests };
 }
 
 const SYMBOL = /^[A-Za-z_$][\w$]*(?:[.#:][A-Za-z_$][\w$]*){0,3}$/;
@@ -165,7 +153,7 @@ export function parseFlowchartResponse(response: string, filesRead: number, trun
 export class FlowchartModelError extends Error {}
 
 export async function generateFlowchart(root: string, runtime: ModelRuntime, context: ExecutionContext,
-	beforeRequest?: ModelAdmissionGate): Promise<Flowchart> {
+	beforeRequest?: ModelAdmissionGate): Promise<GeneratedFlowchart> {
 	assertExecutionEnvironment(context);
 	const { model } = await selectExecutionModel(runtime, context);
 	const thinking = context.policy ? allowedReasoningLevels(context.policy.settings, model)[0] : "off";
@@ -182,5 +170,5 @@ export async function generateFlowchart(root: string, runtime: ModelRuntime, con
 	if (result.stopReason === "error") throw new FlowchartModelError(result.errorMessage || "The model could not generate the flowchart.");
 	const response = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
 	const chart = parseFlowchartResponse(response, source.filesRead, source.truncated, source.files);
-	return { ...chart, nodes: await resolveFlowchartLines(root, chart.nodes), model: `${model.provider}/${model.id}` };
+	return { ...chart, nodes: await resolveFlowchartLines(root, chart.nodes), model: `${model.provider}/${model.id}`, sources: source.digests };
 }

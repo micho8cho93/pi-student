@@ -2,14 +2,31 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceEvent, WorkspaceEventInput, WorkspaceEventType, WorkspaceFileChange, WorkspaceScope,
-	WorkspaceSurface, WorkspaceUiState } from "@pi-student/contracts";
+	WorkspaceSessionState, WorkspaceSurface, WorkspaceUiState } from "@pi-student/contracts";
+import { isLearningStage } from "@pi-student/education/stage";
 import { isSensitiveContextPath } from "@pi-student/shared/file-context";
 import { getInstallationPaths } from "@pi-student/shared/installation-paths";
 import { redactSensitiveText } from "@pi-student/telemetry/privacy";
 import type { TeacherContext } from "@pi-student/telemetry/types";
 
-/** The identity an event stream is keyed by. Derived from the authorized project, never from UI input. */
-export type WorkspaceEventScope = Pick<WorkspaceScope, "projectPath" | "projectId" | "organizationId">;
+/**
+ * The identity an event stream is keyed by. Derived from the authorized project and
+ * signed-in student, never from UI input. `sessionId` selects which Chat session's
+ * transient state a reader sees; it is not part of the storage key.
+ */
+export type WorkspaceEventScope = Pick<WorkspaceScope, "projectPath" | "projectId" | "organizationId" | "userId" | "sessionId">;
+
+/**
+ * Events that describe one Chat session rather than the project. They carry the
+ * emitting session and are only visible to readers of that session: two Chats in
+ * one project never share Learn, "since the previous AI turn", model health,
+ * session budget or learning progress. Everything else (files, editor, tests,
+ * terminal, map, project policy) is project-scoped and shared.
+ */
+export const SESSION_SCOPED_EVENTS: ReadonlySet<WorkspaceEventType> = new Set<WorkspaceEventType>(["chat.prompted", "learn.enabled", "learn.disabled",
+	"question.completed", "model.changed", "model.health", "budget.warning", "budget.exhausted", "learning.progress"]);
+
+const SESSION_ID = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 export const TEST_COMMAND = /^(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+(?:test|build|lint))\b|^(?:npx\s+)?(?:vitest|jest|pytest|mocha)\b|^(?:cargo|go)\s+test\b|^python3?\s+-m\s+(?:pytest|unittest)\b/i;
 
@@ -27,18 +44,29 @@ export function isFlowchartSourceFile(relative: string): boolean {
 	return FLOWCHART_SOURCE_EXTENSION.test(name) || FLOWCHART_IMPORTANT_NAME.test(name);
 }
 
+/** Storage key for a student's project. Two students, or two projects, never share a key; sessions of one student do. */
 export function workspaceEventKey(scope: WorkspaceEventScope): string {
-	return createHash("sha256").update(JSON.stringify([path.resolve(scope.projectPath), scope.projectId ?? null, scope.organizationId ?? null])).digest("hex");
+	// userId is appended only when known, so personal (signed-out) workspaces keep their existing keys.
+	return createHash("sha256").update(JSON.stringify([path.resolve(scope.projectPath), scope.projectId ?? null, scope.organizationId ?? null,
+		...(scope.userId ? [scope.userId] : [])])).digest("hex");
+}
+
+/** Whether a reader bound to `sessionId` may see an event. Project events are visible to every session. */
+export function visibleToSession(event: Pick<WorkspaceEvent, "type" | "session">, sessionId: string | undefined): boolean {
+	return !SESSION_SCOPED_EVENTS.has(event.type) || event.session === sessionId;
 }
 
 /**
  * Both the GUI bridge and the chat runtime derive the same scope from the
  * stored class selection, which only applies to the workspace it was bound to.
  */
-export async function resolveWorkspaceEventScope(projectPath: string, selection: TeacherContext = {}): Promise<WorkspaceEventScope> {
+export async function resolveWorkspaceEventScope(projectPath: string, selection: TeacherContext = {},
+	identity: { userId?: string; sessionId?: string } = {}): Promise<WorkspaceEventScope> {
 	const resolved = await realpath(projectPath);
 	const bound = selection.projectId && selection.workspacePath && await realpath(selection.workspacePath).catch(() => undefined) === resolved;
-	return bound ? { projectPath: resolved, projectId: selection.projectId, organizationId: selection.organizationId } : { projectPath: resolved };
+	if (identity.sessionId !== undefined && !SESSION_ID.test(identity.sessionId)) throw new Error("Workspace session identifier is invalid.");
+	return { projectPath: resolved, ...(bound ? { projectId: selection.projectId, organizationId: selection.organizationId } : {}),
+		...(identity.userId ? { userId: identity.userId } : {}), ...(identity.sessionId ? { sessionId: identity.sessionId } : {}) };
 }
 
 const MAX_COMMAND = 200;
@@ -94,7 +122,7 @@ export function detectFailedTests(output: string): string[] | undefined {
 const EVENT_TYPES: ReadonlySet<WorkspaceEventType> = new Set<WorkspaceEventType>(["file.opened", "file.changed", "editor.selection_changed", "autocomplete.accepted",
 	"terminal.command_started", "terminal.command_finished", "test.started", "test.passed", "test.failed", "flowchart.generated", "flowchart.stale",
 	"flowchart.node_selected", "flowchart.node_cleared", "chat.prompted", "agent.files_changed", "learn.enabled", "learn.disabled", "question.completed", "model.changed", "budget.warning",
-	"budget.exhausted", "capability.changed"]);
+	"budget.exhausted", "capability.changed", "model.health", "learning.progress"]);
 
 /** Events the GUI may report on the student's behalf, and the surface each one comes from. */
 const STUDENT_EVENT_SURFACES: ReadonlyMap<WorkspaceEventType, WorkspaceSurface> = new Map<WorkspaceEventType, WorkspaceSurface>([
@@ -194,8 +222,43 @@ export function parseWorkspaceEventInput(projectPath: string, value: unknown, al
 			if (!Array.isArray(raw.changed)) throw new Error("Workspace event capabilities are invalid.");
 			event = { type, changed: raw.changed.filter((item): item is string => typeof item === "string").slice(0, 30).map(item => item.slice(0, 60)) }; break;
 		}
+		case "model.health": {
+			if (typeof raw.available !== "boolean") throw new Error("Workspace event model health is invalid.");
+			event = { type, available: raw.available, ...(typeof raw.toolUse === "boolean" ? { toolUse: raw.toolUse } : {}) }; break;
+		}
+		case "learning.progress": {
+			if (!isLearningStage(raw.stage)) throw new Error("Workspace event learning stage is invalid.");
+			const goal = text(raw.goal, 160), activeStep = text(raw.activeStep, 160);
+			event = { type, stage: raw.stage, ...(goal ? { goal } : {}), ...(activeStep ? { activeStep } : {}), understandingReady: raw.understandingReady === true,
+				planApproved: raw.planApproved === true, verificationPassed: raw.verificationPassed === true }; break;
+		}
 	}
 	return sensitive ? { ...event, sensitive: true } : event;
+}
+
+/** Applies one session-scoped event to that session's transient state. */
+export function reduceSessionState(state: WorkspaceSessionState, event: WorkspaceEvent): WorkspaceSessionState {
+	switch (event.type) {
+		// Every chat prompt restates Learn, so Code, Map and Terminal converge on the setting Chat actually used.
+		case "learn.enabled": case "learn.disabled": case "chat.prompted": {
+			const enabled = event.type === "chat.prompted" ? event.learnMode : event.type === "learn.enabled";
+			const learn = state.learn?.enabled === enabled ? state.learn : { enabled, at: event.at };
+			return event.type === "chat.prompted" ? { ...state, learn, lastPromptAt: event.at } : { ...state, learn };
+		}
+		case "model.changed": return { ...state, model: { selected: event.model, at: event.at } };
+		case "model.health": return { ...state, model: { ...state.model, available: event.available, ...(event.toolUse === undefined ? {} : { toolUse: event.toolUse }), at: event.at } };
+		case "budget.warning": return { ...state, budget: { ...state.budget, warning: { reason: event.reason, at: event.at } } };
+		case "budget.exhausted": {
+			// An "all" exhaustion is never downgraded by a later agent-only notice.
+			const lane = event.lane === "agent" && state.budget?.exhausted?.lane !== "all" ? "agent" as const : "all" as const;
+			return { ...state, budget: { ...state.budget, exhausted: { reason: event.reason, lane, at: event.at } } };
+		}
+		case "learning.progress": {
+			const { type: _type, seq: _seq, at, workspace: _workspace, source: _source, origin: _origin, session: _session, sensitive: _sensitive, ...progress } = event;
+			return { ...state, progress: { ...progress, at } };
+		}
+		default: return state;
+	}
 }
 
 /** Applies one event to transient UI state. Returns files that newly made the flowchart stale. */
@@ -226,7 +289,7 @@ export function reduceWorkspaceUi(ui: WorkspaceUiState, event: WorkspaceEvent): 
 			...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), ...(event.type === "test.failed" && event.summary ? { summary: event.summary } : {}),
 			...(event.type === "test.failed" && event.failedTests ? { failedTests: event.failedTests } : {}), actor, at: event.at } } }, stale: [] };
 		case "flowchart.node_selected": {
-			const { type: _type, seq: _seq, at: _at, workspace: _workspace, source: _source, origin: _origin, sensitive: _sensitive, ...selectedNode } = event;
+			const { type: _type, seq: _seq, at: _at, workspace: _workspace, source: _source, origin: _origin, session: _session, sensitive: _sensitive, ...selectedNode } = event;
 			return { ui: { ...ui, flowchart: { ...(ui.flowchart ?? { stale: false }), selectedNode } }, stale: [] };
 		}
 		case "flowchart.node_cleared": {
@@ -235,11 +298,7 @@ export function reduceWorkspaceUi(ui: WorkspaceUiState, event: WorkspaceEvent): 
 			return { ui: { ...ui, flowchart }, stale: [] };
 		}
 		case "flowchart.generated": return { ui: { ...ui, flowchart: { generatedAt: event.at, stale: false } }, stale: [] };
-		// Every chat prompt restates Learn, so Code, Map and Terminal converge on the setting Chat actually used.
-		case "learn.enabled": case "learn.disabled": case "chat.prompted": {
-			const enabled = event.type === "chat.prompted" ? event.learnMode : event.type === "learn.enabled";
-			return ui.learn?.enabled === enabled ? { ui, stale: [] } : { ui: { ...ui, learn: { enabled, at: event.at } }, stale: [] };
-		}
+		// Session-scoped events (Learn, prompts, model, budget, progress) are reduced by reduceSessionState.
 		case "flowchart.stale": return ui.flowchart?.generatedAt
 			? { ui: { ...ui, flowchart: { ...ui.flowchart, stale: true, staleFiles: [...new Set([...(ui.flowchart.staleFiles ?? []), ...event.files])].slice(0, MAX_FILES) } }, stale: [] }
 			: { ui, stale: [] };
@@ -283,12 +342,21 @@ export class WorkspaceEventJournal {
 
 export type WorkspaceEventListener = (event: Readonly<WorkspaceEvent>) => void;
 
-interface WorkspaceRecord { scope: WorkspaceEventScope; events: WorkspaceEvent[]; ui: WorkspaceUiState; seen: Set<string> }
+interface WorkspaceRecord {
+	scope: WorkspaceEventScope;
+	events: WorkspaceEvent[];
+	/** Project-scoped UI state, shared by every session. Session fields (learn) live in `sessions`. */
+	ui: WorkspaceUiState;
+	/** Keyed by session id ("" for events emitted without a session). */
+	sessions: Map<string, WorkspaceSessionState>;
+	seen: Set<string>;
+}
 
 /**
- * In-process workspace event stream. Events are keyed by workspace and never
- * delivered across keys; listeners receive events in emission order, including
- * events emitted by other listeners.
+ * In-process workspace event stream. Events are keyed by the student's project and
+ * never delivered across keys; session-scoped events are additionally visible only
+ * to readers of the emitting session. Listeners receive events in emission order,
+ * including events emitted by other listeners.
  */
 export class WorkspaceEventStream {
 	readonly origin = randomUUID();
@@ -303,7 +371,8 @@ export class WorkspaceEventStream {
 		const key = workspaceEventKey(scope);
 		let record = this.workspaces.get(key);
 		if (!record) {
-			record = { scope: { projectPath: path.resolve(scope.projectPath), projectId: scope.projectId, organizationId: scope.organizationId }, events: [], ui: { openFiles: [], recentChanges: [] }, seen: new Set() };
+			record = { scope: { projectPath: path.resolve(scope.projectPath), projectId: scope.projectId, organizationId: scope.organizationId, userId: scope.userId },
+				events: [], ui: { openFiles: [], recentChanges: [] }, sessions: new Map(), seen: new Set() };
 			this.workspaces.set(key, record);
 		}
 		return record;
@@ -312,7 +381,8 @@ export class WorkspaceEventStream {
 	emit(scope: WorkspaceEventScope, source: WorkspaceSurface, input: WorkspaceEventInput | Record<string, unknown>, allowed?: ReadonlySet<WorkspaceEventType>): WorkspaceEvent {
 		const record = this.record(scope);
 		const parsed = parseWorkspaceEventInput(record.scope.projectPath, input, allowed);
-		const event: WorkspaceEvent = { ...parsed, seq: ++this.seq, at: (this.options.now?.() ?? new Date()).toISOString(), workspace: workspaceEventKey(record.scope), source, origin: this.origin };
+		const session = SESSION_SCOPED_EVENTS.has(parsed.type) && scope.sessionId ? { session: scope.sessionId } : {};
+		const event: WorkspaceEvent = { ...parsed, seq: ++this.seq, at: (this.options.now?.() ?? new Date()).toISOString(), workspace: workspaceEventKey(record.scope), source, origin: this.origin, ...session };
 		this.enqueue(record, event, true);
 		return event;
 	}
@@ -334,25 +404,40 @@ export class WorkspaceEventStream {
 			let parsed;
 			try { parsed = parseWorkspaceEventInput(record.scope.projectPath, value); } catch { continue; }
 			const source = (["editor", "chat", "terminal", "flowchart", "learn", "question", "runtime"] as const).find(item => item === value.source) ?? "runtime";
-			this.enqueue(record, { ...parsed, seq: ++this.seq, at: new Date(at).toISOString(), workspace: key, source, origin: value.origin }, false);
+			// A session id is only meaningful on session-scoped events; a malformed one drops the event rather than widening it to every session.
+			if (value.session !== undefined && (typeof value.session !== "string" || !SESSION_ID.test(value.session) || !SESSION_SCOPED_EVENTS.has(parsed.type))) continue;
+			const session = value.session ? { session: value.session } : {};
+			this.enqueue(record, { ...parsed, seq: ++this.seq, at: new Date(at).toISOString(), workspace: key, source, origin: value.origin, ...session }, false);
 		}
 		if (record.seen.size > 5_000) record.seen = new Set([...record.seen].slice(-2_500));
 	}
 
+	/** Receives project events and the events of `scope.sessionId`'s session. */
 	subscribe(scope: WorkspaceEventScope, listener: WorkspaceEventListener): () => void {
 		const key = workspaceEventKey(scope);
 		const listeners = this.listeners.get(key) ?? new Set();
-		listeners.add(listener);
+		const filtered: WorkspaceEventListener = event => { if (visibleToSession(event, scope.sessionId)) listener(event); };
+		listeners.add(filtered);
 		this.listeners.set(key, listeners);
-		return () => { listeners.delete(listener); };
+		return () => { listeners.delete(filtered); };
 	}
 
+	/** Project events plus the events of `scope.sessionId`'s session, oldest first. */
 	events(scope: WorkspaceEventScope): readonly WorkspaceEvent[] {
-		return [...(this.workspaces.get(workspaceEventKey(scope))?.events ?? [])];
+		return (this.workspaces.get(workspaceEventKey(scope))?.events ?? []).filter(event => visibleToSession(event, scope.sessionId));
 	}
 
+	/** Project UI state, with `learn` taken from `scope.sessionId`'s session. */
 	ui(scope: WorkspaceEventScope): WorkspaceUiState {
-		return structuredClone(this.workspaces.get(workspaceEventKey(scope))?.ui ?? { openFiles: [], recentChanges: [] });
+		const record = this.workspaces.get(workspaceEventKey(scope));
+		const ui = structuredClone(record?.ui ?? { openFiles: [], recentChanges: [] });
+		const learn = record?.sessions.get(scope.sessionId ?? "")?.learn;
+		return learn ? { ...ui, learn: { ...learn } } : ui;
+	}
+
+	/** Transient state of `scope.sessionId`'s Chat session. Empty when that session has published nothing. */
+	session(scope: WorkspaceEventScope): WorkspaceSessionState {
+		return structuredClone(this.workspaces.get(workspaceEventKey(scope))?.sessions.get(scope.sessionId ?? "") ?? {});
 	}
 
 	/** Drops transient state for a workspace, e.g. when the session moves to another project. */
@@ -371,8 +456,11 @@ export class WorkspaceEventStream {
 				const next = this.queue.shift()!;
 				if (this.workspaces.get(next.event.workspace) !== next.record) continue;
 				next.record.events = [...next.record.events, next.event].slice(-(this.options.limit ?? 200));
-				const { ui, stale } = reduceWorkspaceUi(next.record.ui, next.event);
-				next.record.ui = ui;
+				let stale: string[] = [];
+				if (SESSION_SCOPED_EVENTS.has(next.event.type)) {
+					const id = next.event.session ?? "";
+					next.record.sessions.set(id, reduceSessionState(next.record.sessions.get(id) ?? {}, next.event));
+				} else ({ ui: next.record.ui, stale } = reduceWorkspaceUi(next.record.ui, next.event));
 				if (next.local) {
 					next.record.seen.add(`${next.event.origin}:${next.event.seq}`);
 					void this.options.journal?.append(next.event);

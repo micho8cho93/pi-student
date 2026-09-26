@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(28);
+select plan(29);
 
 insert into auth.users (id, aud, role, email, raw_app_meta_data, raw_user_meta_data) values
   ('a5100000-0000-0000-0000-000000000001', 'authenticated', 'authenticated', 'hardening-owner@example.test', '{}', '{}'),
@@ -28,8 +28,8 @@ insert into public.organization_memberships (organization_id, user_id, role, sta
 insert into public.classes (id, organization_id, teacher_id, name, join_code) values
   ('a5400000-0000-0000-0000-000000000001', 'a5300000-0000-0000-0000-000000000001', 'a5100000-0000-0000-0000-000000000003', 'Hardening A class', 'HAA-234'),
   ('a5400000-0000-0000-0000-000000000002', 'a5300000-0000-0000-0000-000000000002', 'a5200000-0000-0000-0000-000000000002', 'Hardening B class', 'HBB-234');
-insert into public.class_members (class_id, user_id, role, status) values
-  ('a5400000-0000-0000-0000-000000000001', 'a5100000-0000-0000-0000-000000000003', 'teacher', 'active');
+-- private.add_teacher_membership already made each class teacher an active member.
+select is((select count(*)::integer from public.class_members where class_id = 'a5400000-0000-0000-0000-000000000001' and user_id = 'a5100000-0000-0000-0000-000000000003' and role = 'teacher' and status = 'active'), 1, 'class creation enrolls its teacher');
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a5100000-0000-0000-0000-000000000001', true);

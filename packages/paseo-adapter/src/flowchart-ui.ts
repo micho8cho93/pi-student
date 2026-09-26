@@ -5,7 +5,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
     (() => {
       const api = "http://127.0.0.1:${ecosystemPort}";
       const state = { workspaceId: null, projectName: null, open: false, loading: false, graph: null, error: "", revision: 0, box: null, stale: false,
-        staleFiles: [], selected: null, activeFile: null, fallback: null, learn: false, shapes: new Map() };
+        staleFiles: [], selected: null, activeFile: null, fallback: null, learn: false, shapes: new Map(), checked: null, agent: null };
       const svgNs = "http://www.w3.org/2000/svg";
       const el = (tag, className, label) => {
         const node = document.createElement(tag);
@@ -101,6 +101,32 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         return box;
       };
       const workspaceId = () => location.pathname.match(/\\/workspace\\/(wks_[A-Za-z0-9_-]+)/)?.[1] || null;
+      // The Chat this map follows for Learn. The map overlays the chat, so remember the last one that was visible.
+      const activeAgent = () => {
+        const visible = [...document.querySelectorAll('[data-pi-student-agent-id]')].find(node => node.getClientRects().length > 0)?.getAttribute('data-pi-student-agent-id');
+        if (visible) state.agent = visible;
+        return state.agent;
+      };
+      const target = () => state.workspaceId ? "workspaceId=" + encodeURIComponent(state.workspaceId) : "projectName=" + encodeURIComponent(state.projectName);
+      // Remembered per browser tab so a reload reopens the map the student was looking at. Convenience only.
+      const remember = open => { try { if (state.workspaceId) sessionStorage.setItem("pi-student-map-open:" + state.workspaceId, open ? "1" : ""); } catch {} };
+      const remembered = id => { try { return sessionStorage.getItem("pi-student-map-open:" + id) === "1"; } catch { return false; } };
+      const applyMap = map => {
+        state.stale = Boolean(map?.stale);
+        state.staleFiles = map?.staleFiles || [];
+        if (map?.selectedNode && state.graph?.nodes.some(node => node.id === map.selectedNode.id)) state.selected = map.selectedNode.id;
+      };
+      /** Shows the saved map for this project. Reading it never uses AI, so it works when AI is unavailable. */
+      const loadSaved = async revision => {
+        try {
+          const response = await fetch(api + "/flowchart?" + target());
+          const saved = await response.json();
+          if (!response.ok || revision !== state.revision || !saved.chart) return false;
+          state.graph = saved.chart;
+          applyMap(saved.map);
+          return true;
+        } catch { return false; }
+      };
       const root = () => document.querySelector("#pi-student-flowchart");
       const showPanel = () => {
         const panel = root();
@@ -118,8 +144,10 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         tab?.classList.toggle("active", state.open);
         if (tab) tab.style.background = state.open ? "rgba(127,127,127,.18)" : "transparent";
       };
-      const close = () => {
-        if (state.selected) selectNode(null);
+      /** dismissed: the student closed the map, so its selection stops being Chat context. Leaving the project keeps both. */
+      const close = (dismissed = true) => {
+        if (dismissed) { if (state.selected) selectNode(null); remember(false); }
+        state.selected = null;
         state.open = false;
         state.graph = null;
         state.error = "";
@@ -391,29 +419,32 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.error = "";
         render();
         try {
-          const target = state.workspaceId ? "workspaceId=" + encodeURIComponent(state.workspaceId) : "projectName=" + encodeURIComponent(state.projectName);
-          const response = await fetch(api + "/flowchart?" + target, { method: "POST", headers: { "Content-Type": "application/json", "X-Pi-Student": "ecosystem" }, body: "{}" });
+          const response = await fetch(api + "/flowchart?" + target(), { method: "POST", headers: { "Content-Type": "application/json", "X-Pi-Student": "ecosystem" }, body: "{}" });
           const graph = await response.json();
           if (!response.ok) { if (revision === state.revision) state.fallback = graph.fallback || null; throw new Error(graph.error || "The flowchart could not be generated."); }
           if (revision !== state.revision) return;
-          if (state.selected) selectNode(null);
+          const previous = state.selected;
           state.graph = graph;
           state.stale = false;
           state.staleFiles = [];
           state.fallback = null;
+          // Keep the selected step when the new map still has it; otherwise tell Chat it is gone.
+          if (previous && !graph.nodes.some(node => node.id === previous)) selectNode(null);
         } catch (error) { if (revision === state.revision) state.error = error.message; }
         finally { if (revision === state.revision) { state.loading = false; render(); } }
       };
+      /** Staleness and Learn come from the workspace snapshot, the same source Chat and progress use. */
       const checkStale = async () => {
         if (!state.workspaceId || !state.graph) return;
         try {
-          const response = await fetch(api + "/workspace-activity?workspaceId=" + encodeURIComponent(state.workspaceId));
-          const activity = await response.json();
+          const agent = activeAgent();
+          const response = await fetch(api + "/workspace-snapshot?workspaceId=" + encodeURIComponent(state.workspaceId) + (agent ? "&agentId=" + encodeURIComponent(agent) : ""));
+          const snapshot = await response.json();
           if (!response.ok) return;
-          const staleFiles = activity.flowchart?.staleFiles || [];
-          const learn = activity.scaffolding?.flowchart?.detail === "educational";
-          if (Boolean(activity.flowchart?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|") || learn !== state.learn) {
-            state.stale = Boolean(activity.flowchart?.stale);
+          const staleFiles = snapshot.map?.staleFiles || [];
+          const learn = snapshot.learn?.flowchart?.detail === "educational";
+          if (Boolean(snapshot.map?.stale) !== state.stale || staleFiles.join("|") !== state.staleFiles.join("|") || learn !== state.learn) {
+            state.stale = Boolean(snapshot.map?.stale);
             state.staleFiles = staleFiles;
             state.learn = learn;
             // Re-render the existing map; Learn changes presentation only.
@@ -453,9 +484,21 @@ export const flowchartUiScript = (ecosystemPort: number) => `
           dismiss.addEventListener("click", event => { event.stopPropagation(); close(); });
           dismiss.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); close(); } });
           tab.appendChild(dismiss);
-          tab.addEventListener("click", () => { state.open = true; showPanel(); void checkStale(); });
+          tab.addEventListener("click", () => {
+            state.open = true; remember(true); showPanel();
+            if (!state.graph && !state.loading) void show(); else void checkStale();
+          });
           row.insertBefore(tab, plus.parentElement);
         }
+      };
+      /** Shows the saved map, and generates one only when this project has none yet. */
+      const show = async () => {
+        const revision = ++state.revision;
+        state.loading = true; state.error = ""; render();
+        const found = await loadSaved(revision);
+        if (revision !== state.revision) return;
+        state.loading = false;
+        if (found) { render(); void checkStale(); } else void generate();
       };
       const open = () => {
         const id = workspaceId();
@@ -470,10 +513,11 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.staleFiles = [];
         state.selected = null;
         state.fallback = null;
+        remember(true);
         ensurePanel();
         ensureTab();
         showPanel();
-        generate();
+        void show();
       };
       const openNewWorkspaceFlowchart = () => {
         const selected = document.querySelector('[data-testid="new-workspace-project-picker-trigger"] > div > div[dir="auto"]');
@@ -488,7 +532,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         state.stale = false;
         ensurePanel();
         showPanel();
-        generate();
+        void show();
       };
       const addMenuChoice = (terminal, label, action = open) => {
         if (terminal.parentElement?.querySelector('[data-pi-student-flowchart-choice]')) return;
@@ -508,9 +552,31 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         terminal.insertAdjacentElement("afterend", choice);
         if (menu?.style.height) menu.style.height = "auto";
       };
+      /** After a reload or a project switch, offer this project's saved map again (and reopen it if it was open). */
+      const restore = async id => {
+        if (state.checked === id) return;
+        state.checked = id;
+        try {
+          const response = await fetch(api + "/flowchart?workspaceId=" + encodeURIComponent(id));
+          const saved = await response.json();
+          if (!response.ok || !saved.chart || workspaceId() !== id || state.graph) return;
+          state.workspaceId = id;
+          state.graph = saved.chart;
+          applyMap(saved.map);
+          ensurePanel(); ensureTab();
+          state.open = remembered(id);
+          render(); showPanel();
+        } catch { /* The bridge may still be starting; the Map menu entry remains available. */ }
+      };
       const mount = () => {
         const id = workspaceId();
-        if (state.workspaceId && id !== state.workspaceId) { close(); state.workspaceId = null; }
+        activeAgent();
+        if (state.workspaceId && id !== state.workspaceId) {
+          // Leaving a project hides its map without clearing the selection it saved; the other project's map is never shown here.
+          close(false); state.workspaceId = null;
+        }
+        if (id !== state.checked) state.checked = null;
+        if (id && !state.graph && !state.loading) void restore(id);
         if (state.projectName && location.pathname !== "/new") close();
         if (id && state.graph && !document.querySelector('[data-pi-student-flowchart-tab]')) ensureTab();
         document.querySelectorAll('[data-testid="workspace-new-tab-menu-terminal"], [data-testid="workspace-header-new-terminal"], [data-testid^="workspace-new-tab-"][data-testid$="terminal"]').forEach(terminal => {

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(38);
+select plan(39);
 
 insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) values
  ('81000000-0000-0000-0000-000000000001','authenticated','authenticated','env-owner@example.test','{}','{}'),
@@ -86,7 +86,11 @@ select ok(public.resolve_institutional_environment('84000000-0000-0000-0000-0000
 select is(jsonb_array_length(public.resolve_institutional_environment('84000000-0000-0000-0000-000000000001')->'skills'),0,'disabled skill unavailable');
 select ok(not (public.resolve_institutional_environment('84000000-0000-0000-0000-000000000001')->'mcps'->0 ? 'secret_reference'),'student MCP inventory has no secret reference');
 select lives_ok($$ select public.record_execution_audit_event('85000000-0000-0000-0000-000000000001','82000000-0000-0000-0000-000000000001','83000000-0000-0000-0000-000000000001','84000000-0000-0000-0000-000000000001','session-1','mcp.list','allowed',current_setting('env.mcp')::uuid,'network','implement','authorized','gondolin','ready') $$,'student execution decision is recorded through the RPC');
+-- execution_audit_admin_read hides audit rows from the student who wrote them.
+select is((select count(*) from public.execution_audit_events where event_id='85000000-0000-0000-0000-000000000001'),0::bigint,'student cannot read execution audit rows');
+select set_config('request.jwt.claim.sub','81000000-0000-0000-0000-000000000001',true);
 select is((select count(*) from public.execution_audit_events where event_id='85000000-0000-0000-0000-000000000001'),1::bigint,'execution audit stores one safe decision');
+select set_config('request.jwt.claim.sub','81000000-0000-0000-0000-000000000003',true);
 select throws_ok($$ select public.record_execution_audit_event('85000000-0000-0000-0000-000000000002','82000000-0000-0000-0000-000000000002','83000000-0000-0000-0000-000000000001','84000000-0000-0000-0000-000000000001','session-2','mcp.list','allowed',current_setting('env.mcp')::uuid,'network','implement','authorized','gondolin','ready') $$,'42501','Managed student project required','audit tenant identifiers cannot be substituted');
 select throws_ok($$ select public.resolve_institutional_environment('84000000-0000-0000-0000-000000000002') $$,'42501','Managed project access required','other tenant environment unavailable');
 select * from finish();

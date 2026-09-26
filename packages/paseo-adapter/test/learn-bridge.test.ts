@@ -37,7 +37,7 @@ describe("Learn GUI bridge", () => {
 		}
 	});
 
-	it("shares a GUI Learn toggle with Code, Map and Terminal in that project only", async () => {
+	it("shares a GUI Learn toggle with Code, Map and Terminal for that conversation and project only", async () => {
 		const home = await mkdtemp(path.join(os.tmpdir(), "pi-learn-surfaces-"));
 		vi.stubEnv("PI_STUDENT_HOME", home);
 		const [a, b] = [path.join(home, "project-a"), path.join(home, "project-b")];
@@ -53,7 +53,7 @@ describe("Learn GUI bridge", () => {
 		await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
 		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		const headers = { "Origin": "http://127.0.0.1:6767", "X-Pi-Student": "ecosystem", "Content-Type": "application/json" };
-		const activity = async (workspaceId: string) => (await fetch(`${base}/workspace-activity?workspaceId=${workspaceId}`, { headers })).json();
+		const activity = async (workspaceId: string, agentId?: string) => (await fetch(`${base}/workspace-activity?workspaceId=${workspaceId}${agentId ? `&agentId=${agentId}` : ""}`, { headers })).json();
 		const report = (body: object) => fetch(`${base}/workspace-events?workspaceId=wks_a`, { method: "POST", headers, body: JSON.stringify(body) });
 		try {
 			expect((await activity("wks_a")).scaffolding.enabled).toBe(false);
@@ -63,12 +63,14 @@ describe("Learn GUI bridge", () => {
 			for (const event of [{ type: "file.opened", file: "src/app.ts" }, { type: "flowchart.node_selected", id: "n1", label: "Start" },
 				{ type: "terminal.command_finished", command: "npm test", exitCode: 1, summary: "Error: boom" }]) {
 				expect((await report(event)).status).toBe(202);
-				const state = await activity("wks_a");
+				const state = await activity("wks_a", "agent-a");
 				expect(state.learn.enabled).toBe(true);
 				expect(state.scaffolding).toMatchObject({ enabled: true, flowchart: { detail: "educational" }, editor: { autocomplete: "concise" },
 					terminal: { onFailure: "explain-first", blocksCommands: false } });
 			}
-			expect((await activity("wks_b")).scaffolding.enabled).toBe(false);
+			// Learn is session state: surfaces not following that conversation, and other projects, keep their own setting.
+			expect((await activity("wks_a")).scaffolding.enabled).toBe(false);
+			expect((await activity("wks_b", "agent-b")).scaffolding.enabled).toBe(false);
 			expect((await activity("wks_b")).learn).toBeUndefined();
 		} finally {
 			await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

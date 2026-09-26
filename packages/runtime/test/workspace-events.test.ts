@@ -181,7 +181,7 @@ describe("workspace activity in the chat session", () => {
 		const output = `${"ok line\n".repeat(500)} FAIL test/math.test.ts > adds\nAssertionError: expected 3 to be 4\nCommand exited with code 1`;
 		await fire("tool_result", { toolName: "bash", toolCallId: "3", isError: true, content: [{ type: "text", text: output }] });
 		const scope = activity.scope()!;
-		expect(activity.stream.events(scope).map(event => event.type)).toEqual(["agent.files_changed", "terminal.command_started", "test.started", "terminal.command_finished", "test.failed"]);
+		expect(activity.stream.events(scope).map(event => event.type)).toEqual(["learning.progress", "agent.files_changed", "terminal.command_started", "test.started", "terminal.command_finished", "test.failed"]);
 		expect(activity.stream.ui(scope).tests?.lastRun).toMatchObject({ command: "npm test", passed: false, exitCode: 1, summary: "FAIL test/math.test.ts > adds\nAssertionError: expected 3 to be 4" });
 		expect(activity.stream.ui(scope).recentChanges).toMatchObject([{ file: "src/existing.ts", author: "agent", kind: "modified" }]);
 		const prompt = await fire("before_agent_start", { systemPrompt: "base", prompt: "why did it fail?" });
@@ -200,9 +200,10 @@ describe("workspace activity in the chat session", () => {
 		await fire("message_end", { message: { role: "assistant" } });
 		await fire("message_end", { message: { role: "assistant" } });
 		const events = activity.stream.events(activity.scope()!);
-		expect(events.map(event => event.type)).toEqual(["learn.enabled", "capability.changed", "chat.prompted", "budget.exhausted"]);
-		expect(events[1]).toMatchObject({ changed: ["terminal", "limits"] });
-		expect(events[2]).toMatchObject({ learnMode: true });
+		expect(events.map(event => event.type)).toEqual(["learning.progress", "learn.enabled", "capability.changed", "chat.prompted", "budget.exhausted"]);
+		expect(events[0]).toMatchObject({ stage: "understand", understandingReady: false, planApproved: false });
+		expect(events[2]).toMatchObject({ changed: ["terminal", "limits"] });
+		expect(events[3]).toMatchObject({ learnMode: true });
 	});
 
 	it("clears transient state from the previous project when the project changes", async () => {
@@ -220,7 +221,8 @@ describe("workspace activity in the chat session", () => {
 		expect(classScope).toMatchObject({ projectId: "class-project" });
 		expect(activity.stream.events(personal)).toEqual([]);
 		expect(activity.stream.ui(classScope).tests).toBeUndefined();
-		expect(activity.stream.events(classScope).map(event => event.type)).toEqual(["capability.changed", "chat.prompted"]);
+		// Learning progress is republished for the new project; nothing from the previous one follows.
+		expect(activity.stream.events(classScope).map(event => event.type)).toEqual(["capability.changed", "learning.progress", "chat.prompted"]);
 		expect(activity.stream.events(classScope)[0]).toMatchObject({ changed: ["project"] });
 		expect(prompt).toBeUndefined();
 	});
