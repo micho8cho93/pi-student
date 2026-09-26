@@ -1,3 +1,4 @@
+import { failedModelHealth, workspaceModelHealthReporter } from "./workspace-model-health.js";
 import path from "node:path";
 import { isToolCallEventType, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { EffectiveStudentCapabilities, NextAvailableAction, WorkspaceEventInput, WorkspaceMapStatus, WorkspaceSurface, WorkspaceUiState } from "@pi-student/contracts";
@@ -12,7 +13,7 @@ import { buildQuestionWorkspaceContext } from "./question-workspace-context.js";
 import { buildWorkspaceChatContext } from "./workspace-chat-context.js";
 import { resolveWorkspaceEventScope, TEST_COMMAND, WorkspaceEventJournal, WorkspaceEventStream,
 	workspaceEventKey, type WorkspaceEventScope } from "./workspace-events.js";
-import { learningProgress } from "./workspace-snapshot.js";
+import { learningProgress, sessionCapabilitySignals } from "./workspace-snapshot.js";
 import { WorkspaceMapStore } from "./workspace-map-store.js";
 
 export type WorkspaceActivityEmitter = (source: WorkspaceSurface, event: WorkspaceEventInput) => void;
@@ -55,8 +56,7 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 	let capabilities: Record<string, string> | undefined;
 	let exhausted: string | undefined;
 	let agentExhausted: string | undefined;
-	// What this session last told other surfaces about its model and learning progress.
-	let modelAvailable: boolean | undefined;
+	// What this session last told other surfaces about its learning progress.
 	let progress: string | undefined;
 	/**
 	 * Bumped whenever this Chat is bound to another project, student or session (or
@@ -92,7 +92,6 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 			pending.clear();
 			exhausted = undefined;
 			agentExhausted = undefined;
-			modelAvailable = undefined;
 			progress = undefined;
 		}
 		scope = next;
@@ -108,7 +107,7 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		publishProgress();
 	};
 	const actions = async (observed: Pick<StudentCapabilityInputs, "model" | "exhausted"> = {}) => {
-		const capabilities = await options.capabilities?.(observed).catch(() => undefined);
+		const capabilities = await options.capabilities?.({ ...(scope ? sessionCapabilitySignals(stream.session(scope)) : {}), ...observed }).catch(() => undefined);
 		return capabilities && resolveNextAvailableActions({ capabilities, ui: scope ? stream.ui(scope) : { openFiles: [], recentChanges: [] } });
 	};
 	const relative = (file: unknown) => {
@@ -195,13 +194,10 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 				emit("runtime", { type: "budget.exhausted", reason: agentReached!, lane: "agent" });
 			}
 			// Publish model health so Code, Map and progress stop offering AI help Chat cannot give, and offer it again once Chat recovers.
-			const failed = (event.message as { stopReason?: string }).stopReason === "error";
-			if (failed || modelAvailable === false) {
-				if (modelAvailable !== !failed) emit("chat", { type: "model.health", available: !failed });
-				modelAvailable = !failed;
-			}
-			// A provider failure ends AI help for now, not the student's work.
-			if (failed && !allClosed && !agentClosed) await notify({ model: { available: false } }, "");
+			const health = event.message.stopReason === "error" ? failedModelHealth(event.message)
+				: ["stop", "length", "toolUse"].includes(event.message.stopReason) ? { status: "available" as const } : undefined;
+			if (health) await workspaceModelHealthReporter(stream, scope, "chat")(health);
+			if (health && health.status !== "available" && !allClosed && !agentClosed) await notify({ model: { available: false, health } }, "");
 			exhausted = reached;
 			agentExhausted = agentReached;
 		});

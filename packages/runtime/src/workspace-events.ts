@@ -243,7 +243,9 @@ export function parseWorkspaceEventInput(projectPath: string, value: unknown, al
 		}
 		case "model.health": {
 			if (typeof raw.available !== "boolean") throw new Error("Workspace event model health is invalid.");
-			event = { type, available: raw.available, ...(typeof raw.toolUse === "boolean" ? { toolUse: raw.toolUse } : {}) }; break;
+			const health = raw.health as { status?: unknown } | undefined;
+			if (health && (!["available", "provider_unavailable", "model_unavailable", "authentication_failure", "transient_failure"].includes(String(health.status)) || raw.available !== (health.status === "available"))) throw new Error("Workspace model health status is invalid.");
+			event = { type, available: raw.available, ...(health ? { health: { status: health.status } as import("@pi-student/contracts").WorkspaceModelHealth } : {}), ...(typeof raw.toolUse === "boolean" ? { toolUse: raw.toolUse } : {}) }; break;
 		}
 		case "learning.progress": {
 			if (!isLearningStage(raw.stage)) throw new Error("Workspace event learning stage is invalid.");
@@ -265,7 +267,7 @@ export function reduceSessionState(state: WorkspaceSessionState, event: Workspac
 			return event.type === "chat.prompted" ? { ...state, learn, lastPromptAt: event.at } : { ...state, learn };
 		}
 		case "model.changed": return { ...state, model: { selected: event.model, at: event.at } };
-		case "model.health": return { ...state, model: { ...state.model, available: event.available, ...(event.toolUse === undefined ? {} : { toolUse: event.toolUse }), at: event.at } };
+		case "model.health": return { ...state, model: { ...state.model, available: event.available, health: event.health, ...(event.toolUse === undefined ? {} : { toolUse: event.toolUse }), at: event.at } };
 		case "budget.warning": return { ...state, budget: { ...state.budget, warning: { reason: event.reason, at: event.at } } };
 		case "budget.exhausted": {
 			// An "all" exhaustion is never downgraded by a later agent-only notice.

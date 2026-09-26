@@ -57,9 +57,9 @@ Manual editing, the student's own terminal, and viewing an existing map do not r
 Rules:
 
 - Two students on one machine, or two projects, never share a key. A signed-out (personal) workspace keeps the key it had before `userId` was added.
-- The GUI may only report project events from the editor, terminal and Map (`STUDENT_SURFACE_EVENTS`). Session events come only from the Chat process; the bridge emits Learn toggles for the conversation it resolved itself.
+- The GUI may only report project events from the editor, terminal and Map (`STUDENT_SURFACE_EVENTS`). Session events come only from trusted host code: Chat, the model execution boundary for Map/autocomplete, and bridge Learn toggles. The bridge resolves the conversation from the Paseo registry; browser-submitted `model.health` events are rejected.
 - Journal replays drop a session id that is malformed or attached to a project event, rather than widening the event to every session.
-- When a Chat rebinds to another project, student or session, it forgets the previous record, pending tool calls, budget notices, model health and published progress. A tool result that arrives later is dropped.
+- When a Chat rebinds to another project, student or session, it forgets the previous record, pending tool calls, budget notices and published progress. Model health follows only the newly bound session. A tool result that arrives later is dropped.
 - A GUI request that names no registered conversation gets a session-less view: project state only, Learn off, no session budget or model observations.
 
 ## Live workspace snapshot
@@ -76,6 +76,18 @@ It contains the stage, goal, active plan step, verification, Learn scaffolding, 
 The bridge serves it at `GET /workspace-snapshot?workspaceId&agentId`, with `since=<revision>` for a bounded long-poll (the bridge re-derives it every second until it changes). `/workspace-actions` and `/project-progress` return subsets of the same snapshot, so the GUI cannot disagree with itself. The progress panel follows it live; the Map reads staleness and Learn from it.
 
 The snapshot is presentation. Session and tool guards, model admission, sandbox enforcement, completion path validation and model assertions still enforce independently at execution time; a stale or forged snapshot cannot authorize anything.
+
+## Model health and recovery
+
+`workspace-model-health.ts` provides the single trusted reporting path. Chat classifies assistant model outcomes; Map and autocomplete wrap only `completeSimple`, after authorization/admission and before parsing or storing results. They emit `model.health` into the existing session event stream. No additional global state store is used.
+
+`WorkspaceModelHealth` has fixed statuses: `available`, `provider_unavailable`, `model_unavailable`, `authentication_failure`, and `transient_failure`. Known provider status codes and narrowly recognized SDK error messages are classified in memory; only the status reaches the journal and snapshot. Unknown/internal/extension failures, tool failures, context-window failures, and cancellation do not publish an unavailable signal. Neither raw errors nor prompts, credentials, responses or stack traces are stored as health metadata. Tool execution failure is not evidence that a model cannot use tools reliably.
+
+A successful model response (`stop`, `length`, or `toolUse`) restores session availability regardless of which trusted surface observed the outage. Aborted and failed requests never count as recovery. The reporter refreshes other processes' journal events before publishing, so an older failure cannot overwrite a newer local recovery on the next refresh. Model selection starts a fresh observation state. Health is presentation metadata; it never bypasses admission, policy, authorization or tool guards.
+
+Map and Code follow the same derived snapshot as progress. Code pauses automatic AI suggestions, retains local completion and editing, and offers explicit retry. Map labels refresh as a retry while showing the saved diagram and manual fallback actions. Retrying still executes the normal authorized request path; observation does not permanently prevent the successful request needed to discover recovery. Map jobs are deduplicated within the bound session so one conversation's execution cannot publish health into another conversation. Requests with no registered conversation do not publish session health.
+
+The browser journey covers Chat-first and Map-first outages, Code/Map/progress presentation, generic tool/internal failures, cancellation without false recovery, cross-surface recovery, and preservation of a selected stale Map after failed refresh. Bridge tests additionally cover autocomplete-first outages, recovery, session/project isolation and forged health rejection. Runtime tests verify classification, journal replay/redaction and recovery across separate producer streams.
 
 ## Map persistence
 
@@ -106,14 +118,14 @@ Tests are hermetic: `tooling/vitest-hermetic.ts` gives every vitest run empty Pi
 | Area | State after this change | Needed follow-up |
 | --- | --- | --- |
 | Transport | Snapshot "subscription" is a bounded long-poll over a pull-based journal refresh, re-derived every second per waiting request. Journal compaction is still best effort across processes. | A push channel from the journal (file watch or local socket) and durable ordering before relying on the journal for anything authoritative. |
-| Model health enforcement | Chat publishes provider availability; every surface shows it. The tool guard and completion path still learn about failures only from their own requests. Reliable tool-use is not yet observed automatically. | Feed a session-scoped health observation into the guards where semantics match; detect tool-use unreliability from model metadata. |
+| Tool-use reliability | Request health is synchronized across Chat, Map and autocomplete. Ordinary tool failures deliberately do not classify a model as unreliable. | Add a reliable tool-use signal only when the execution layer exposes evidence that distinguishes model inability from tool/runtime failures. |
 | Budget | Session exhaustion is published when Chat's `message_end` sees it; "low" warnings reach the GUI only via admission or explicit `budget.warning`. | Publish session counters' warning thresholds if students need earlier notice. |
 | Teacher selection | `teacher-context.json` still holds one active binding; opening another workspace fails closed but does not restore that workspace's binding. | Persist authorized bindings per workspace and revalidate on activation. |
-| Identity on the bridge | The bridge resolves the signed-in student with a 10 s cache; if the classroom backend is unreachable it uses a personal key, so Chat and GUI activity temporarily separate (fails closed). | Share the resolved identity between the Chat and bridge processes. |
+| Identity on the bridge | The bridge resolves the signed-in student with a 10 s cache; if the classroom backend is unreachable it cannot resolve the managed student, so managed workspace activity fails closed with `identity_required`. | Share the resolved identity between the Chat and bridge processes. |
 | Editor | The document, selection and undo stack stay in Paseo/CodeMirror; completion preferences use browser storage. | Scope completion preferences to the workspace if they should roam. |
 | Pre-workspace Map | The `projectName` route (new-workspace screen) uses the same store and key, but the GUI does not restore a selection there. | Unify once a workspace can be resolved on that screen. |
 | Enforcement vs presentation | Kept separate on purpose: presentation uses `resolveStudentCapabilities` and the snapshot; enforcement stays at execution boundaries. Some environment-readiness conditions are enforced by the request path but not projected. | Project them where semantics match; do not merge enforcement into the projection. |
 
 ## Validation
 
-See the change summary for commands and results. Database tests were run against a local Postgres 15 with pgTAP and a Supabase auth/role shim that mirrors what the migrations and tests use; the real Supabase image is only exercised in the `supabase / rls` CI job.
+Local validation uses `npm run build`, `npm run typecheck`, `npm test`, `npm run check:boundaries` and `npm run check:versions`. The required hosted CI gates additionally run the real Supabase migration/lint/RLS suite and the Gondolin VM sandbox/network smoke test. Stabilization signoff requires every required job, including `ci-passed`, to be green for the current change; a local database shim or an earlier green commit is not a substitute. The model-health change and its current checks are tracked in [PR #2](https://github.com/micho8cho93/pi-student/pull/2).

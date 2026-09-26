@@ -12,6 +12,9 @@ export type CapabilityRestriction =
 	/** Agent execution budget is used up; tutoring may still be available. */
 	| "agent_budget_exhausted"
 	| "provider_unavailable"
+	| "model_unavailable"
+	| "authentication_failure"
+	| "transient_failure"
 	| "model_cannot_use_tools"
 	| "agent_editing_disabled"
 	| "autocomplete_disabled"
@@ -176,14 +179,17 @@ export interface WorkspaceLearningProgress {
 	verificationPassed: boolean;
 }
 
+/** Metadata-only outcome of a trusted model request. No raw error details. */
+export type WorkspaceModelHealth = { status: "available" | "provider_unavailable" | "model_unavailable" | "authentication_failure" | "transient_failure" };
+
 /**
  * Transient state of one Chat session, reduced from its session-scoped events.
- * It is a publication of the Chat process's authorities (WorkflowController,
+ * It is a publication of the session's execution authorities (WorkflowController,
  * CapabilityState, observed model responses), never a second store of them.
  */
 export interface WorkspaceSessionState {
 	learn?: { enabled: boolean; at: string };
-	model?: { selected?: string; available?: boolean; toolUse?: boolean; at: string };
+	model?: { selected?: string; health?: WorkspaceModelHealth; available?: boolean; toolUse?: boolean; at: string };
 	/** lane "agent": only AI implementation stopped; "all": every AI surface stopped. */
 	budget?: { exhausted?: { reason: string; lane: "agent" | "all"; at: string }; warning?: { reason: string; at: string } };
 	progress?: WorkspaceLearningProgress & { at: string };
@@ -224,7 +230,7 @@ export interface StudentWorkspaceSnapshot {
 	learn: LearnScaffolding;
 	capabilities: EffectiveStudentCapabilities;
 	budget: WorkspaceBudgetRow[];
-	model: { available: boolean; reason?: CapabilityRestriction; selected?: string };
+	model: { available: boolean; health?: WorkspaceModelHealth; reason?: CapabilityRestriction; selected?: string };
 	actions: NextAvailableAction[];
 	fallback?: { headline: string; canStill: string[]; hint?: string };
 	map: WorkspaceMapStatus;

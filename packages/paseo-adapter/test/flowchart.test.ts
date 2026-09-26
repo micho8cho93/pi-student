@@ -51,6 +51,23 @@ describe("student flowchart", () => {
 		} finally { await rm(root, { recursive: true, force: true }); }
 	});
 
+	it("preserves structured outage classification for unbound fallback and never turns cancellation into an outage", async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), "pi-flowchart-health-"));
+		try {
+			await writeFile(path.join(root, "main.ts"), "export const ready = true;");
+			const model = { provider: "school", id: "tutor", reasoning: false };
+			const context = { identity: { kind: "personal" }, workspacePath: root, sandbox: { mode: "gondolin" } } as ExecutionContext;
+			for (const [error, status] of [[Object.assign(new Error("private provider response"), { status: 503 }), "provider_unavailable"],
+				[Object.assign(new Error("503 request cancelled"), { name: "AbortError" }), undefined]] as const) {
+				const runtime = { getAvailable: async () => [model], getProviderAuthStatus: () => ({ configured: true }), completeSimple: async () => { throw error; } } as unknown as ModelRuntime;
+				const report = vi.fn();
+				await expect(generateFlowchart(root, runtime, context, undefined, report)).rejects.toMatchObject({ health: status ? { status } : undefined });
+				if (status) expect(report).toHaveBeenCalledWith({ status });
+				else expect(report).not.toHaveBeenCalled();
+			}
+		} finally { await rm(root, { recursive: true, force: true }); }
+	});
+
 	it("links nodes to source only through files the generator read", async () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), "pi-flowchart-refs-"));
 		try {
