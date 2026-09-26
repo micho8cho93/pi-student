@@ -6,4 +6,3 @@ dist/
 infra/supabase/.temp/
 .turbo/
 apps/*/artifacts/
-infra/supabase/supabase/

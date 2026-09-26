@@ -1,4 +1,5 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -173,10 +174,20 @@ describe("Paseo integration", () => {
 		const paths = getInstallationPaths({ PI_STUDENT_HOME: root });
 		const runtimeEntry = path.join(root, "client-runtime.js");
 		const commands: string[][] = [];
+		const checkedOut = path.resolve(path.dirname(createRequire(import.meta.url).resolve("@getpaseo/cli/package.json")), "..", "..", ".bin", "paseo");
+		// The checked-out Paseo is shared by every test worker and other test files read it,
+		// so record which installation the launcher patches instead of rewriting it.
+		const patched: string[] = [];
+		const record = async (executable: string) => { patched.push(executable); return false; };
+		const patchers = { "@pi-student/paseo-adapter/web-ui": "patchPaseoWebUi", "@pi-student/paseo-adapter/git-state-patch": "patchPaseoGitState",
+			"@pi-student/paseo-adapter/dictation-timeout-patch": "patchPaseoDictationTimeout" };
 		vi.stubEnv("PI_STUDENT_DEV", "1");
+		vi.resetModules();
+		for (const [module, name] of Object.entries(patchers)) vi.doMock(module, async original => ({ ...await original<object>(), [name]: record }));
 		try {
+			const { launchPaseoGui: launchDevelopment } = await import("@pi-student/paseo-adapter/launcher");
 			await writeFile(runtimeEntry, "#!/usr/bin/env node\n");
-			await launchPaseoGui({
+			await launchDevelopment({
 				paths,
 				runtimeEntry,
 				run(args) { commands.push(args); return args[0] === "status" ? result("", 1) : result(); },
@@ -185,7 +196,10 @@ describe("Paseo integration", () => {
 			});
 			expect(commands).toContainEqual(["daemon", "start", "--web-ui", "--no-relay", "--no-mcp"]);
 			expect(await readFile(paths.runtimeLauncher, "utf8")).toContain(runtimeEntry);
+			expect(patched).toEqual([checkedOut, checkedOut, checkedOut]);
 		} finally {
+			for (const module of Object.keys(patchers)) vi.doUnmock(module);
+			vi.resetModules();
 			vi.unstubAllEnvs();
 			await rm(root, { recursive: true, force: true });
 		}
