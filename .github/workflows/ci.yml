@@ -82,7 +82,7 @@ jobs:
       - run: npm run infra:lint
       - run: npm run infra:test
       - if: always()
-        run: npx supabase stop --workdir infra/supabase --no-backup
+        run: npx supabase stop --workdir infra --no-backup
 
   sandbox:
     name: sandbox / network

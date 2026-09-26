@@ -1,6 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["vitest.config.ts", "tooling/vitest-hermetic.ts"],
+  "globalDependencies": ["vitest.config.ts", "tooling/vitest-hermetic.ts", "tooling/vitest-annotations.ts"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { access, appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFileSync, existsSync } from "node:fs";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -120,7 +120,8 @@ export async function startBrowserWorkspace(options: { policy?: EffectivePolicy 
 		const cwd = projects[id];
 		const workflow = new WorkflowController(createLearningSession(cwd));
 		// Pi persists the workflow into the session file on every change; project progress reads it after restarts.
-		workflow.onChange(() => { void appendFile(sessionFile(agent), `${JSON.stringify({ type: "custom", customType: "pi-student-workflow", data: workflow.state })}\n`); });
+		// Like Pi's SessionManager, append synchronously: unordered async appends can leave an older state last.
+		workflow.onChange(() => { appendFileSync(sessionFile(agent), `${JSON.stringify({ type: "custom", customType: "pi-student-workflow", data: workflow.state })}\n`); });
 		const controls = capabilityState(workflow);
 		const handlers = new Map<string, Handler[]>();
 		let activeTools = ["read", "write", "edit", "bash"];

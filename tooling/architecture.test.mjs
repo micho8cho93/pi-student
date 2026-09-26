@@ -69,3 +69,25 @@ test("tests import only workspace packages their package depends on", async () =
 	}
 	assert.deepEqual([...new Set(problems)], []);
 });
+
+test("every package test run inherits the hermetic root Vitest configuration", async () => {
+	// tooling/vitest-hermetic.ts isolates HOME, Pi/Paseo configuration and credentials.
+	// It only applies when Vitest runs with the repository root as its root and no
+	// package-level configuration replaces it.
+	const root = await readFile("vitest.config.ts", "utf8");
+	assert.match(root, /globalSetup:\s*\[\s*"\.\/tooling\/vitest-hermetic\.ts"\s*\]/);
+	const problems = [];
+	for (const group of ["apps", "packages", "services"]) {
+		for (const entry of await readdir(group, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const dir = path.join(group, entry.name);
+			const manifest = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8").catch(() => "null"));
+			const script = manifest?.scripts?.test;
+			if (!script) continue;
+			if (!/^vitest run --root \.\.\/\.\. /.test(script)) problems.push(`${dir}: test script must run "vitest run --root ../.."`);
+			const local = (await readdir(dir)).filter(file => /^vite(?:st)?\.(?:config|workspace)\.[cm]?[jt]s$/.test(file));
+			if (local.length) problems.push(`${dir}: ${local.join(", ")} would bypass the hermetic setup`);
+		}
+	}
+	assert.deepEqual(problems, []);
+});
