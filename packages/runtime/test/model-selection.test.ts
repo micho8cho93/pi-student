@@ -39,4 +39,11 @@ describe("shared model selection", () => {
 		expect(await selectFallbackModel(fake(), context(["openai/small"]), small)).toBeUndefined();
 		expect(await availableExecutionModels(fake(), context([]))).toEqual([]);
 	});
+	it("uses the same approved fallback inventory for sessions with only a policy context", async () => {
+		const policy = context(["openai/small"]).policy;
+		expect(await selectFallbackModel(fake(), { policy }, small)).toBeUndefined();
+		expect(await selectFallbackModel(fake(), { policy: context([]).policy }, small)).toBeUndefined();
+		expect((await selectFallbackModel(fake(), {}, small))?.model.id).toBe("other");
+		expect(await selectFallbackModel(fake([small, other], ["other"]), {}, small)).toBeUndefined();
+	});
 });

@@ -323,7 +323,7 @@ async function handleModelCommand(modelRef: string | undefined, agent: LearningA
 		return;
 	}
 
-	const models = executionContext ? await availableExecutionModels(runtime, await executionContext()) : await runtime.getAvailable();
+	const models = await availableExecutionModels(runtime, await executionContext?.() ?? {});
 	write(`\n${theme.bold("Configured models")}\n`);
 	for (const model of models.filter(model => !allowedProviders || model.provider === "institution" || allowedProviders.includes(model.provider))) write(`  ${model.provider}/${model.id}${agent.session.model?.provider === model.provider && agent.session.model?.id === model.id ? " · active" : ""}\n`);
 	write(`${theme.dim("Switch with /model provider/model-id, or use /settings to connect another provider.")}\n`);

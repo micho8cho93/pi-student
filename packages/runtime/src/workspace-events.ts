@@ -1,13 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { StudentWorkspaceContext, WorkspaceEvent, WorkspaceEventInput, WorkspaceEventType, WorkspaceFileChange, WorkspaceScope,
+import type { WorkspaceEvent, WorkspaceEventInput, WorkspaceEventType, WorkspaceFileChange, WorkspaceScope,
 	WorkspaceSurface, WorkspaceUiState } from "@pi-student/contracts";
 import { isSensitiveContextPath } from "@pi-student/shared/file-context";
 import { getInstallationPaths } from "@pi-student/shared/installation-paths";
 import { redactSensitiveText } from "@pi-student/telemetry/privacy";
 import type { TeacherContext } from "@pi-student/telemetry/types";
-import { updateWorkspaceUi } from "./student-workspace.js";
 
 /** The identity an event stream is keyed by. Derived from the authorized project, never from UI input. */
 export type WorkspaceEventScope = Pick<WorkspaceScope, "projectPath" | "projectId" | "organizationId">;
@@ -386,9 +385,4 @@ export class WorkspaceEventStream {
 			}
 		} finally { this.dispatching = false; }
 	}
-}
-
-/** Projects stream state onto a bound student workspace. The stream must hold the same workspace. */
-export function applyWorkspaceActivity(workspace: StudentWorkspaceContext, stream: WorkspaceEventStream): StudentWorkspaceContext {
-	return updateWorkspaceUi(workspace, stream.ui(workspace.scope));
 }

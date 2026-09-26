@@ -16,7 +16,8 @@ import { persistApiKey } from "@pi-student/runtime/auth-storage";
 import { DEFAULT_OLLAMA_URL, OLLAMA_PROVIDER_ID, readOllamaConfig, registerOllama, saveOllamaUrl } from "@pi-student/runtime/ollama";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FlowchartModelError, generateFlowchart } from "./flowchart.js";
-import { CompletionError, EditorCompletionService, type CompletionRequest } from "./editor-completion.js";
+import { CompletionError, EditorCompletionService, type CompletionRequest, type ModelExecutionEnvironment } from "./editor-completion.js";
+import { availableExecutionModels } from "@pi-student/runtime/model-selection";
 import { providerCatalog } from "@pi-student/shared/provider-catalog";
 import { mcpCatalog } from "@pi-student/shared/extension-catalog";
 import { approvedProvidersForCurrentProject, currentPiUserId } from "@pi-student/supabase-adapter/provider-approvals";
@@ -37,11 +38,12 @@ import { SandboxManager } from "@pi-student/sandbox/sandbox-manager";
 import { GondolinSandboxProvider } from "@pi-student/sandbox-gondolin/provider";
 import type { ExecutionContext, ModelAdmissionGate } from "@pi-student/contracts";
 import { assertExecutionEnvironment, authorizeExtension } from "@pi-student/runtime/extension-authorization";
-import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, studentEventSurface, TEST_COMMAND, WorkspaceEventJournal, WorkspaceEventStream,
+import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, studentEventSurface, TEST_COMMAND, workspaceEventKey, WorkspaceEventJournal, WorkspaceEventStream,
 	type WorkspaceEventScope } from "@pi-student/runtime/workspace-events";
 import { describeAssistanceFallback, resolveNextAvailableActions } from "@pi-student/runtime/assistance";
-import { resolveStudentCapabilities, unavailableStudentCapabilities, type StudentCapabilityInputs } from "@pi-student/runtime/student-workspace";
+import { createStudentWorkspace, resolveStudentCapabilities, unavailableStudentCapabilities, type StudentCapabilityInputs } from "@pi-student/runtime/student-workspace";
 import { describeWorkspaceBudget } from "@pi-student/runtime/workspace-budget";
+import { readProjectProgress } from "./project-progress.js";
 
 export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
@@ -59,7 +61,8 @@ export async function runEcosystemBridge(
 	process.stdout.write(`Pi Student ecosystem bridge listening on http://127.0.0.1:${port}\n`);
 }
 
-export function createEcosystemBridgeServer(projectPath: string, paseoHome?: string) {
+export function createEcosystemBridgeServer(projectPath: string, paseoHome?: string,
+	options: { resolveModelExecution?: (root: string) => Promise<ModelExecutionEnvironment> } = {}) {
 	let signIn: GitHubSignInProgress | undefined;
 	let connecting: Promise<void> | undefined;
 	const github = new GhGitHubClient(undefined, progress => { signIn = progress; });
@@ -79,7 +82,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 	};
 	const completionSessionId = randomUUID();
 	const admissionSignals = new Map<string, Pick<StudentCapabilityInputs, "exhausted" | "agentExhausted" | "warning">>();
-	const resolveModelExecution = async (root: string) => {
+	const resolveModelExecution = options.resolveModelExecution ?? (async (root: string) => {
 		const runtime = await getProviderRuntime();
 		const context = await readTeacherContext();
 		const config = readSupabaseConfig();
@@ -103,26 +106,31 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			? { ...resolvedContext, environment: { ...resolvedContext.environment, capabilities: localEnvironment.capabilities } }
 			: resolvedContext;
 		const admission = new SupabaseModelAdmissionProvider(client, (token, sessionId, thinking) => direct.refreshHostedToken(token, sessionId, thinking));
+		const admissionScope = workspaceEventKey({ projectPath: executionContext.workspacePath, projectId: executionContext.projectId, organizationId: executionContext.organizationId });
 		const beforeRequest: ModelAdmissionGate = async (provider, modelId, thinking, purpose) => {
 			if (!executionContext.projectId) return;
 			const decision = await admission.check(executionContext.projectId, provider, modelId, thinking, completionSessionId, purpose);
 			// Remember the latest decision so workspace actions can show budget lanes without another check.
-			admissionSignals.set(root, decision.blocked ? { exhausted: "The AI budget or model approval blocks this request." }
+			admissionSignals.set(admissionScope, decision.blocked ? { exhausted: "The AI budget or model approval blocks this request." }
 				: decision.agentBlocked ? { agentExhausted: "The AI implementation budget has been reached." }
 					: decision.warning ? { warning: "AI usage is approaching its limit." } : {});
 			if (decision.blocked) throw new CompletionError(purpose === "autocomplete" ? "AI completion is paused by the project's model approval or AI budget."
 				: "This model is blocked by the project approval or budget.", 403);
 		};
 		return { runtime, context: executionContext, beforeRequest };
-	};
+	});
 	const completions = new EditorCompletionService(resolveModelExecution);
 	/** Deterministic next actions for the GUI. Failing to resolve AI access never hides manual workflows. */
 	const workspaceActions = async (root: string, scope: WorkspaceEventScope, observed: Pick<StudentCapabilityInputs, "model"> = {}) => {
-		const capabilities = await resolveModelExecution(root)
-			.then(({ context }) => resolveStudentCapabilities(context, { ...admissionSignals.get(root), ...observed }))
-			.catch(error => unavailableStudentCapabilities(safeError(error), error instanceof CompletionError && error.status === 403 ? "budget_exhausted" : "provider_unavailable"));
-		const actions = resolveNextAvailableActions({ capabilities, ui: workspaceEvents.ui(scope) });
-		return { actions, fallback: describeAssistanceFallback(actions), budget: describeWorkspaceBudget(capabilities.budget) };
+		const ui = workspaceEvents.ui(scope);
+		const workspace = await resolveModelExecution(root)
+			.then(async ({ runtime, context }) => createStudentWorkspace(context, { claimed: scope, ui,
+				capabilities: resolveStudentCapabilities(context, { ...admissionSignals.get(workspaceEventKey(scope)), ...observed,
+					models: (await availableExecutionModels(runtime, context)).map(model => `${model.provider}/${model.id}`) }) }))
+			.catch(error => ({ ui, capabilities: unavailableStudentCapabilities(safeError(error), error instanceof CompletionError && error.status === 403 ? "budget_exhausted" : "provider_unavailable") }));
+		const { capabilities } = workspace;
+		const actions = resolveNextAvailableActions(workspace);
+		return { actions, fallback: describeAssistanceFallback(actions), budget: describeWorkspaceBudget(capabilities.budget), managed: !!capabilities.projectId };
 	};
 	const requireApprovedProvider = async (providerId: string) => {
 		const approved = await approvedProvidersForCurrentProject();
@@ -143,7 +151,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				await finishSupabaseMcpLogin(pending.userId, url.searchParams.get("code")!);
 				response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'" }).end("<h1>Supabase connected</h1><p>You can return to Pi Student.</p>"); return;
 			}
-			if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true, provider: "pi-student-ecosystem", multiProject: true, learnMode: true, flowchart: true });
+			if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true, provider: "pi-student-ecosystem", multiProject: true, learnMode: true, flowchart: true, projectProgress: true });
 			if (url.pathname === "/editor-completion/models" && request.method === "GET") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
 				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
@@ -192,6 +200,14 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				await workspaceEvents.refresh(scope);
 				return json(response, 200, await workspaceActions(root, scope, url.searchParams.get("model") === "unavailable" ? { model: { available: false } } : {}));
 			}
+			if (request.method === "GET" && url.pathname === "/project-progress") {
+				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
+				const root = await resolvePaseoWorkspacePath(paseoHome, url.searchParams.get("workspaceId")!, projectPath);
+				const progress = await readProjectProgress(paseoHome, root, url.searchParams.get("workspaceId"), url.searchParams.get("agentId"));
+				const scope = await eventScope(root);
+				await workspaceEvents.refresh(scope);
+				return json(response, 200, { progress, activeFile: workspaceEvents.ui(scope).activeFile, ...(await workspaceActions(root, scope)) });
+			}
 			if (["GET", "POST"].includes(request.method ?? "") && url.pathname === "/learn-mode") {
 				const workspaceId = url.searchParams.get("workspaceId");
 				const activeProject = await resolvePaseoWorkspacePath(paseoHome, workspaceId ?? undefined, projectPath);
@@ -229,6 +245,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 						const scope = await eventScope(activeProject);
 						await workspaceEvents.refresh(scope).catch(() => {});
 						workspaceEvents.emit(scope, "flowchart", { type: "flowchart.generated", filesRead: chart.filesRead, ...(chart.model ? { model: chart.model } : {}) });
+						await eventJournal.flush();
 						return chart;
 					});
 					flowchartJobs.set(activeProject, job);

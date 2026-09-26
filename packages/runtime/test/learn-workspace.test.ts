@@ -114,11 +114,18 @@ describe("Learn Mode across Chat, Code, Map and Terminal", () => {
 		const previous = a.activity.scope()!;
 		stream.emit(previous, "learn", { type: "learn.enabled" });
 		stream.emit(previous, "flowchart", { type: "flowchart.node_selected", id: "n", label: "Old project step" });
+		await a.fire("tool_call", { toolName: "edit", toolCallId: "old-project-edit", input: { path: "/workspace/src/old-project.ts" } });
+		await a.fire("tool_call", { toolName: "bash", toolCallId: "old-project-test", input: { command: "npm test" } });
 		a.select({ projectId: "class-project", organizationId: "org", workspacePath: previous.projectPath });
 		const moved = (await a.fire("before_agent_start", { systemPrompt: "base" }))?.systemPrompt ?? "";
+		// Delayed completions from the previous scope must not become this project's activity.
+		await a.fire("tool_result", { toolName: "edit", toolCallId: "old-project-edit", isError: false, content: [] });
+		await a.fire("tool_result", { toolName: "bash", toolCallId: "old-project-test", isError: true, content: [{ type: "text", text: "FAIL old-project.test.ts\nCommand exited with code 1" }] });
 		expect(stream.events(previous)).toEqual([]);
 		expect(stream.ui(a.activity.scope()!).learn?.enabled ?? false).toBe(false);
 		expect(stream.ui(a.activity.scope()!).flowchart).toBeUndefined();
+		expect(stream.ui(a.activity.scope()!).recentChanges).toEqual([]);
+		expect(stream.ui(a.activity.scope()!).tests).toBeUndefined();
 		expect(moved).not.toContain("Old project step");
 		expect(moved).not.toContain("Learn Mode");
 	});

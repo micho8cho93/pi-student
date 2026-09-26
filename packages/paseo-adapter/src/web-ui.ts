@@ -3,10 +3,11 @@ import { patchFileEditorBundle } from "./file-editor-patch.js";
 import { editorCompletionUiScript } from "./editor-completion-ui.js";
 import { flowchartUiScript } from "./flowchart-ui.js";
 import { terminalActivityUiScript } from "./terminal-activity-ui.js";
+import { projectProgressUiScript } from "./project-progress-ui.js";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const STUDENT_UI_MARKER = "data-pi-student-ui=\"student-v12\"";
+const STUDENT_UI_MARKER = "data-pi-student-ui=\"student-v13\"";
 
 // Paseo owns the bundled web UI, so keep this small student-specific shell
 // override here rather than forking the whole vendor web application.
@@ -424,8 +425,7 @@ export const studentUiScript = (ecosystemPort: number) => `
         };
 
         const mountEcosystem = () => {
-          const scroll = sidebarList();
-          const host = (scroll && scroll.firstElementChild) || scroll || document.querySelector('[data-testid="sidebar-scroll-body"]') || document.querySelector('[data-testid="sidebar-view"]');
+          const host = document.querySelector('#pi-student-progress-tools');
           if (!host || host.querySelector("#pi-student-ecosystem")) return;
           const mount = element("div");
           mount.id = "pi-student-ecosystem";
@@ -460,8 +460,7 @@ export const studentUiScript = (ecosystemPort: number) => `
           const wrap = mount && mount.shadowRoot && mount.shadowRoot.querySelector(".wrap");
           const pageRoot = document.querySelector("#pi-student-ecosystem-page")?.shadowRoot?.querySelector(".page-root");
           if (!wrap || !pageRoot || !ecosystemState) return;
-		  wrap.replaceChildren(element("div", "eyebrow", "ECOSYSTEM"));
-		  wrap.appendChild(renderEnvironmentQuick());
+		  wrap.replaceChildren();
 		  wrap.appendChild(renderGithubQuick());
           wrap.appendChild(renderDeploymentsQuick());
           pageRoot.replaceChildren();
@@ -469,16 +468,6 @@ export const studentUiScript = (ecosystemPort: number) => `
             pageRoot.appendChild(renderPanel());
             positionEcosystemPage();
           }
-		};
-
-		const renderEnvironmentQuick = () => {
-		  const environment = ecosystemState.environment || {};
-		  const status = environment.status || "configured";
-		  const tone = status === "active" || status === "ready" ? "ok" : ["failed", "unsupported"].includes(status) ? "bad" : "muted";
-		  const section = element("div", "section");
-		  section.appendChild(element("div", tone, "Environment · " + status));
-		  if (environment.message) section.appendChild(element("div", "muted", environment.message));
-		  return section;
 		};
 
 		const renderGithubQuick = () => {
@@ -848,13 +837,14 @@ export async function patchPaseoWebUi(paseoExecutable: string, ecosystemPort = 6
 	await patchLearnControlsBundle(indexPath);
 	await patchFileEditorBundle(indexPath);
 	const original = await readFile(indexPath, "utf8");
-	const script = studentUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort) + editorCompletionUiScript(ecosystemPort) + terminalActivityUiScript(ecosystemPort);
+	const script = studentUiScript(ecosystemPort) + projectProgressUiScript(ecosystemPort) + flowchartUiScript(ecosystemPort) + editorCompletionUiScript(ecosystemPort) + terminalActivityUiScript(ecosystemPort);
 	if (original.includes(script)) return false;
 	const html = original
 		.replace(/\s*<script data-pi-student-ui="[^"]*">[\s\S]*?<\/script>/g, "")
 		.replace(/\s*<script data-pi-student-flowchart="[^"]*">[\s\S]*?<\/script>/g, "")
 		.replace(/\s*<script data-pi-student-editor-completion="[^"]*">[\s\S]*?<\/script>/g, "")
-		.replace(/\s*<script data-pi-student-terminal-activity="[^"]*">[\s\S]*?<\/script>/g, "");
+		.replace(/\s*<script data-pi-student-terminal-activity="[^"]*">[\s\S]*?<\/script>/g, "")
+		.replace(/\s*<script data-pi-student-project-progress="[^"]*">[\s\S]*?<\/script>/g, "");
 	const insertionPoint = "</head>";
 	if (!html.includes(insertionPoint)) throw new Error(`Paseo web UI is missing its head element: ${indexPath}`);
 	await writeFile(indexPath, html.replace(insertionPoint, `${script}\n  ${insertionPoint}`));

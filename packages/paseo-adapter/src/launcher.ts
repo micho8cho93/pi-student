@@ -119,8 +119,8 @@ async function ensureVozBridge(paths: InstallationPaths, runtimeEntry?: string):
 async function ensureEcosystemBridge(paths: InstallationPaths, port: number, runtimeEntry?: string): Promise<void> {
 	if (await isEcosystemBridgeRunning(port)) {
 		const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) });
-		const health = await response.json() as { learnMode?: boolean; flowchart?: boolean };
-		if (health.learnMode !== true || health.flowchart !== true) throw new Error("An older Pi Student background bridge is still running. Stop the existing pi-student ecosystem-bridge process and relaunch the GUI to enable the current student features.");
+		const health = await response.json() as { learnMode?: boolean; flowchart?: boolean; projectProgress?: boolean };
+		if (health.learnMode !== true || health.flowchart !== true || health.projectProgress !== true) throw new Error("An older Pi Student background bridge is still running. Stop the existing pi-student ecosystem-bridge process and relaunch the GUI to enable the current student features.");
 		return;
 	}
 	const entry = await findRuntimeEntry(runtimeEntry);

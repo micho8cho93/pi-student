@@ -39,9 +39,9 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 	const contextStore = options.contextStore ?? new FileTeacherContextStore();
 	let scope: WorkspaceEventScope | undefined;
 	let capabilities: Record<string, string> | undefined;
-	let learnMode = workflow.state.learnMode === true;
 	let exhausted: string | undefined;
 	let agentExhausted: string | undefined;
+	const pending = new Map<string, { file?: string; existed: boolean; command?: string; test: boolean }>();
 	const emit: WorkspaceActivityEmitter = (source, event) => {
 		if (!scope) return;
 		try { stream.emit(scope, source, event); } catch { /* Activity is best-effort metadata. */ }
@@ -51,7 +51,12 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		const next = await resolveWorkspaceEventScope(workflow.state.cwd, await contextStore.read().catch(() => ({})));
 		const moved = scope && workspaceEventKey(scope) !== workspaceEventKey(next);
 		// Editor selections, test failures and file lists from the previous project must not follow the student.
-		if (moved) stream.forget(scope!);
+		if (moved) {
+			stream.forget(scope!);
+			pending.clear();
+			exhausted = undefined;
+			agentExhausted = undefined;
+		}
 		scope = next;
 		await stream.refresh(scope).catch(() => {});
 		const current = capabilitySnapshot();
@@ -59,6 +64,7 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		capabilities = current;
 		if (changed.length) emit("runtime", { type: "capability.changed", changed });
 		// Tell Code, Map and Terminal which Learn setting this chat uses in this project. Never copied from the previous project.
+		const learnMode = workflow.state.learnMode === true;
 		if ((stream.ui(scope).learn?.enabled ?? false) !== learnMode) emit("learn", { type: learnMode ? "learn.enabled" : "learn.disabled" });
 	};
 	const actions = async (observed: Pick<StudentCapabilityInputs, "model" | "exhausted"> = {}) => {
@@ -73,16 +79,15 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 	};
 
 	const extension: ExtensionFactory = pi => {
-		const pending = new Map<string, { file?: string; existed: boolean; command?: string; test: boolean }>();
 		const unsubscribe = workflow.onChange(() => {
 			const enabled = workflow.state.learnMode === true;
-			if (enabled === learnMode) return;
-			learnMode = enabled;
+			if (!scope || enabled === (stream.ui(scope).learn?.enabled ?? false)) return;
 			emit("learn", { type: enabled ? "learn.enabled" : "learn.disabled" });
 		});
 		pi.on("session_start", async () => { await bind(); });
 		pi.on("before_agent_start", async event => {
 			await bind();
+			const learnMode = workflow.state.learnMode === true;
 			// Build before recording this prompt, so "since the previous AI turn" ends here.
 			// A /question turn gets the student's current work instead, so the question is about what they are doing.
 			const question = workflow.state.question?.phase === "generate";

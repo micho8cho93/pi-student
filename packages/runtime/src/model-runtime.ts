@@ -1,6 +1,5 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FileCredentialStore, getAuthPath } from "./auth-storage.js";
-import { resolveThinkingLevel, type ThinkingModelCapabilities, type ThinkingLevel } from "@pi-student/policy/thinking";
 import { OllamaDiscoveryError, readOllamaUrl, registerOllama } from "./ollama.js";
 
 export async function createModelRuntime(): Promise<ModelRuntime> {
@@ -21,19 +20,4 @@ export async function createModelRuntime(): Promise<ModelRuntime> {
 		}
 	}
 	return runtime;
-}
-
-export function findFallbackModel(runtime: ModelRuntime, current: { provider: string; id: string }, allowed: (model: ReturnType<ModelRuntime["getAvailableSnapshot"]>[number]) => boolean = () => true): ReturnType<ModelRuntime["getAvailableSnapshot"]>[number] | undefined {
-	return runtime
-		.getAvailableSnapshot()
-		.filter((model) => `${model.provider}/${model.id}` !== `${current.provider}/${current.id}`)
-		.filter((model) => runtime.getProviderAuthStatus(model.provider).configured)
-		.filter(allowed)
-		.sort((left, right) => Number(right.reasoning) - Number(left.reasoning))[0];
-}
-
-export function normalizeFallbackThinkingLevel(model: ThinkingModelCapabilities, requested: ThinkingLevel): ThinkingLevel {
-	// Kept as a named runtime boundary so model fallback and direct model
-	// selection cannot accidentally reuse an unsupported provider level.
-	return resolveThinkingLevel(model, requested);
 }

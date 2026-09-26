@@ -32,7 +32,8 @@ import { createLearningStateExtension } from "./learning-state.js";
 import { createStudentPlanExtension } from "./student-plan.js";
 import { createSaveToDesktopExtension } from "./save-to-desktop.js";
 import { EDUCATIONAL_SYSTEM_PROMPT, stageGuidance } from "./prompts.js";
-import { createModelRuntime, findFallbackModel, normalizeFallbackThinkingLevel } from "./model-runtime.js";
+import { createModelRuntime } from "./model-runtime.js";
+import { resolveThinkingLevel } from "@pi-student/policy/thinking";
 import { assertExecutionModel, refreshSessionModelInventory, selectExecutionModel, selectFallbackModel } from "./model-selection.js";
 import { classifyTerminalCommand, isSafeInspectionCommand, isSafeVerificationCommand, isWorkspacePath } from "./command-policy.js";
 import { formatProviderErrorMessage } from "./ui.js";
@@ -56,7 +57,7 @@ import { createProjectCapabilitiesExtension } from "./project-capabilities.js";
 import { createWorkspaceActivity, type WorkspaceActivityEmitter } from "./workspace-activity.js";
 import { formatAssistanceFallback } from "./assistance.js";
 import { resolveStudentCapabilities } from "./student-workspace.js";
-import { modelAllowed, allowedReasoningLevels } from "@pi-student/policy/capability-policy";
+import { allowedReasoningLevels } from "@pi-student/policy/capability-policy";
 
 const SANDBOX_SYSTEM_PROMPT = `
 Project files and shell commands are sandboxed. The active student project is mounted at /workspace. Use /workspace for every read, write, search, and shell command; never use the host project path, process.cwd(), or any /Users/... path. If repository context is needed, inspect /workspace directly. Never ask for or expose the host project path. Provider authentication stays on the host and is not available to project processes.
@@ -343,17 +344,14 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 				const controls = capabilityState(workflow);
 				const context = await services?.executionContext?.();
 				const preferred = services?.preferredFallbackModelId?.(current.provider, current.id);
-				const fallback = context
-					? (await selectFallbackModel(modelRuntime, context, current, preferred))?.model
-					: findFallbackModel(modelRuntime, current, model =>
-						!(controls.effective?.sourceVersions?.organization && !controls.settings.models.length) && modelAllowed(controls.settings, model));
+				const fallback = (await selectFallbackModel(modelRuntime, context ?? { policy: controls.effective }, current, preferred))?.model;
 				if (fallback) {
 					fallbackAttempted = true;
 					const requestedLevel = pi.getThinkingLevel();
 					const switched = await pi.setModel(fallback);
 					if (switched) {
 						const permitted = allowedReasoningLevels(capabilityState(workflow).settings, fallback);
-						const normalized = normalizeFallbackThinkingLevel(fallback, requestedLevel);
+						const normalized = resolveThinkingLevel(fallback, requestedLevel);
 						pi.setThinkingLevel(permitted.includes(normalized) ? normalized : permitted[0]!);
 						ctx.ui.setStatus("pi-model-fallback", `Fallback: ${current.provider}/${current.id} → ${fallback.provider}/${fallback.id}`);
 						ctx.ui.notify(`Provider unavailable. Switched to ${fallback.provider}/${fallback.id}.`, "warning");

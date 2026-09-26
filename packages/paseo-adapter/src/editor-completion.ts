@@ -8,6 +8,7 @@ import { availableExecutionModels } from "@pi-student/runtime/model-selection";
 import { isSensitiveContextPath } from "@pi-student/shared/file-context";
 import { getInstallationPaths } from "@pi-student/shared/installation-paths";
 import { assertExecutionEnvironment } from "@pi-student/runtime/extension-authorization";
+import { resolveStudentCapabilities } from "@pi-student/runtime/student-workspace";
 
 const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|swift|cs|php|vue|astro|svelte|html|css|scss|sql|json|ya?ml|toml|sh)$/i;
 // Local abuse and performance protection (runaway editor loops, request storms).
@@ -28,7 +29,7 @@ export interface CompletionRequest {
 
 export interface CompletionModel { id: string; label: string }
 
-interface CompletionEnvironment {
+export interface ModelExecutionEnvironment {
 	runtime: ModelRuntime;
 	context: ExecutionContext;
 	beforeRequest?: ModelAdmissionGate;
@@ -38,13 +39,13 @@ export class EditorCompletionService {
 	private readonly attempts = new Map<string, number[]>();
 	private loaded = false;
 	private quotaLock: Promise<void> = Promise.resolve();
-	constructor(private readonly environment: (root: string) => Promise<CompletionEnvironment>,
+	constructor(private readonly environment: (root: string) => Promise<ModelExecutionEnvironment>,
 		private readonly usagePath = path.join(getInstallationPaths().config, "editor-completion-requests.json")) {}
 
 	async models(root: string): Promise<CompletionModel[]> {
 		const { runtime, context } = await this.environment(root);
 		try { assertExecutionEnvironment(context); } catch { return []; }
-		if (context.policy && !context.policy.settings.fileEditing) return [];
+		if (!resolveStudentCapabilities(context).autocomplete.allowed) return [];
 		return (await availableExecutionModels(runtime, context))
 			.map(model => ({ id: `${model.provider}/${model.id}`, label: model.name || model.id }));
 	}
@@ -57,7 +58,8 @@ export class EditorCompletionService {
 		const environment = await this.environment(root);
 		const { runtime, context } = environment;
 		try { assertExecutionEnvironment(context); } catch (error) { throw new CompletionError(error instanceof Error ? error.message : "The coding environment is unavailable.", 403); }
-		if (context.policy && !context.policy.settings.fileEditing) throw new CompletionError("AI completion is disabled because file editing is disabled for this project.", 403);
+		const autocomplete = resolveStudentCapabilities(context).autocomplete;
+		if (!autocomplete.allowed) throw new CompletionError(autocomplete.reason!, 403);
 		const models = await availableExecutionModels(runtime, context);
 		const model = request.model === "auto"
 			? [...models].sort((a, b) => (a.cost.input + a.cost.output) - (b.cost.input + b.cost.output))[0]

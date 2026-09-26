@@ -64,6 +64,8 @@ export const editorCompletionUiScript = (port: number) => `
     limit.value = String(settings.perMinute); limitLabel.append(limit);
     const note = node("div", "AI suggestions send excerpts of the open file to the selected model. No nearby files are included. Local word completion stays on this device.");
     const status = node("div", "");
+    const advanced = node("details");
+    advanced.append(node("summary", "Advanced AI settings"), modelLabel, limitLabel);
     toggle.type = "button";
     toggle.title = "Code completion settings";
     toggle.setAttribute("aria-label", "Code completion settings");
@@ -74,7 +76,7 @@ export const editorCompletionUiScript = (port: number) => `
     style(select, { maxWidth: "100%", width: "100%", marginTop: "4px" });
     style(note, { opacity: ".75", lineHeight: "1.4" });
     style(status, { minHeight: "1em", opacity: ".8" });
-    panel.append(enableLabel, modelLabel, limitLabel, note, status);
+    panel.append(enableLabel, note, advanced, status);
     toolbar.append(toggle, panel);
     const oldPosition = host.style.position;
     host.style.position = "relative";
@@ -94,15 +96,14 @@ export const editorCompletionUiScript = (port: number) => `
     report({ type: "file.opened" });
     // Lets the flowchart highlight nodes that refer to this file.
     window.dispatchEvent(new CustomEvent("pi-student:file-opened", { detail: { file: filename, workspaceId: initialWorkspace } }));
-    let executedModel = null;
-    const label = () => { toggle.textContent = settings.enabled ? "AI: " + (settings.model === "auto" ? (executedModel || "Auto") : (models.find(item => item.id === settings.model)?.label || settings.model).slice(0, 24)) : "Complete · AI off"; };
+    const label = () => { toggle.textContent = settings.enabled ? "AI suggestions on" : "AI suggestions off"; };
     label();
     const loadModels = async () => {
       try {
         models = (await request("/editor-completion/models")).models;
         select.replaceChildren();
         const auto = node("option", "Auto (lowest cost approved)"); auto.value = "auto"; select.append(auto);
-        for (const model of models) { const option = node("option", model.label + " (" + model.id + ")"); option.value = model.id; select.append(option); }
+        for (const model of models) { const option = node("option", model.label); option.value = model.id; select.append(option); }
         if (settings.model !== "auto" && !models.some(item => item.id === settings.model)) { const unavailable = node("option", "Unavailable: " + settings.model); unavailable.value = settings.model; unavailable.disabled = true; select.append(unavailable); status.textContent = "The selected model is unavailable. Choose another model."; }
         select.value = settings.model;
         if (!models.length) status.textContent = "Connect an approved model to use AI suggestions.";
@@ -111,7 +112,7 @@ export const editorCompletionUiScript = (port: number) => `
     };
     toggle.onclick = () => { panel.hidden = !panel.hidden; panel.style.display = panel.hidden ? "none" : "grid"; if (!panel.hidden) void loadModels(); };
     enabled.onchange = () => { settings.enabled = enabled.checked; save(settings); label(); if (!settings.enabled) clear(); else schedule(); };
-    select.onchange = () => { settings.model = select.value; executedModel = null; status.textContent = ""; save(settings); label(); clear(); };
+    select.onchange = () => { settings.model = select.value; status.textContent = ""; save(settings); label(); clear(); };
     limit.onchange = () => { settings.perMinute = Number(limit.value); save(settings); };
     const hidePopup = () => { popup?.remove(); popup = null; options = []; ai = null; };
     const clear = () => { revision++; if (timer) clearTimeout(timer); timer = null; controller?.abort(); controller = null; hidePopup(); };
@@ -172,8 +173,7 @@ export const editorCompletionUiScript = (port: number) => `
         const body = await request("/editor-completion", { method: "POST", signal: controller.signal, body: JSON.stringify({ filename, content, cursor: pos, model: settings.model }) });
         if (current !== revision || workspace() !== initialWorkspace || view.state.doc.toString() !== content || view.state.selection.main.head !== pos || !settings.enabled) return;
         if (body.suggestion && !content.slice(pos).startsWith(body.suggestion)) show([], body.suggestion);
-        executedModel = body.model; label();
-        status.textContent = "Using " + body.model + ". Server budget: " + body.remainingMinute + " this minute, " + body.remainingDay + " today.";
+        status.textContent = "Suggestion ready.";
       } catch (error) { if (error.name !== "AbortError" && current === revision) status.textContent = error.message; }
     };
     const schedule = () => {

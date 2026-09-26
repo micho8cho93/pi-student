@@ -185,7 +185,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         const selection = el("div", "selection");
         selection.hidden = true;
         content.appendChild(selection);
-        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + (state.graph.model ? " · Model " + state.graph.model : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString() + (state.stale ? " · Out of date: project files changed since then. Refresh to update." : "")
+        const meta = el("div", "meta", state.graph.nodes.length + " steps · Based on " + state.graph.filesRead + " project files" + (state.graph.truncated ? " · Large files were summarized" : "") + " · Generated " + new Date(state.graph.generatedAt).toLocaleTimeString() + (state.stale ? " · Out of date: project files changed since then. Refresh to update." : "")
           + (state.activeFile && state.graph.nodes.some(relatesToOpenFile) ? " · " + state.graph.nodes.filter(relatesToOpenFile).length + " steps relate to " + state.activeFile : ""));
         content.appendChild(meta);
         applyHighlights();
@@ -440,7 +440,7 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         let tab = document.querySelector('[data-pi-student-flowchart-tab]');
         if (tab?.parentElement !== row) { tab?.remove(); tab = null; }
         if (!tab) {
-          tab = el("button", "", "◇ Flowchart");
+          tab = el("button", "", "Map");
           tab.type = "button";
           tab.dataset.piStudentFlowchartTab = "true";
           tab.setAttribute("aria-label", "Open flowchart tab");
@@ -514,9 +514,9 @@ export const flowchartUiScript = (ecosystemPort: number) => `
         if (state.projectName && location.pathname !== "/new") close();
         if (id && state.graph && !document.querySelector('[data-pi-student-flowchart-tab]')) ensureTab();
         document.querySelectorAll('[data-testid="workspace-new-tab-menu-terminal"], [data-testid="workspace-header-new-terminal"], [data-testid^="workspace-new-tab-"][data-testid$="terminal"]').forEach(terminal => {
-          addMenuChoice(terminal, terminal.getAttribute("data-testid")?.startsWith("workspace-header") ? "New flowchart" : "Flowchart");
+          addMenuChoice(terminal, "Map");
         });
-        document.querySelectorAll('[data-testid="new-workspace-launch-option-blank"]').forEach(terminal => addMenuChoice(terminal, "Flowchart", openNewWorkspaceFlowchart));
+        document.querySelectorAll('[data-testid="new-workspace-launch-option-blank"]').forEach(terminal => addMenuChoice(terminal, "Map", openNewWorkspaceFlowchart));
         document.querySelectorAll('[data-testid="workspace-new-tab-menu-agent"], [data-testid="workspace-header-new-agent"]').forEach(agent => {
           const text = agent.querySelector("[dir=auto]") || [...agent.querySelectorAll("*")].find(node => !node.children.length && /^(New )?Agent$/.test(node.textContent.trim()));
           if (text && /^(New )?Agent$/.test(text.textContent.trim())) text.textContent = text.textContent.trim().startsWith("New") ? "New chat" : "Chat";

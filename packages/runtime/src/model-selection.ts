@@ -4,11 +4,12 @@ import { modelAllowed } from "@pi-student/policy/capability-policy";
 
 type NativeModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 export type ModelSelection = { model: NativeModel; requested?: string; fallbackFrom?: string };
+type ModelPolicyContext = Pick<ExecutionContext, "classId" | "projectId" | "organizationId" | "policy">;
 
 /** The only model inventory used by the Terminal and Paseo execution surfaces. */
-export async function availableExecutionModels(runtime: ModelRuntime, context: ExecutionContext): Promise<NativeModel[]> {
+export async function availableExecutionModels(runtime: ModelRuntime, context: ModelPolicyContext): Promise<NativeModel[]> {
 	if (context.classId && !context.projectId) return [];
-	if (context.organizationId && !context.policy?.settings.models.length) return [];
+	if ((context.organizationId || context.policy?.sourceVersions?.organization) && !context.policy?.settings.models.length) return [];
 	const available = await runtime.getAvailable();
 	return available.filter(model => runtime.getProviderAuthStatus(model.provider).configured)
 		.filter(model => !context.policy || modelAllowed(context.policy.settings, model));
@@ -36,7 +37,7 @@ export async function assertExecutionModel(runtime: ModelRuntime, context: Execu
 }
 
 /** A provider failure may switch only to another currently approved model. */
-export async function selectFallbackModel(runtime: ModelRuntime, context: ExecutionContext,
+export async function selectFallbackModel(runtime: ModelRuntime, context: ModelPolicyContext,
 	failed: { provider: string; id: string }, preferred?: string): Promise<ModelSelection | undefined> {
 	const candidates = (await availableExecutionModels(runtime, context))
 		.filter(item => item.provider !== failed.provider || item.id !== failed.id);

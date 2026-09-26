@@ -71,7 +71,7 @@ describe("Paseo integration", () => {
 			await writeFile(path.join(webUi, "index.html"), "<!doctype html><html><head></head><body></body></html>");
 			expect(await patchPaseoWebUi(executable)).toBe(true);
 			const patched = await readFile(path.join(webUi, "index.html"), "utf8");
-			expect(patched).toContain('data-pi-student-ui="student-v12"');
+			expect(patched).toContain('data-pi-student-ui="student-v13"');
 			expect(patched).toContain('data-pi-student-flowchart="v1"');
 			expect(patched).toContain('localStorage.removeItem(connectionRegistryKey)');
 			expect(patched).toContain("workspace-new-tab-browser");
@@ -92,7 +92,7 @@ describe("Paseo integration", () => {
 			expect(patched).toContain('actionButton("Publish", publishFromGui, "success")');
 			expect(patched).toContain('actionButton("Remove site", () => removeSiteFromGui(project), "danger")');
 			expect(patched).not.toContain('width:min(520px,90vw)');
-			const script = patched.match(/<script data-pi-student-ui="student-v12">([\s\S]*?)<\/script>/)?.[1];
+			const script = patched.match(/<script data-pi-student-ui="student-v13">([\s\S]*?)<\/script>/)?.[1];
 			expect(script).toBeTruthy();
 			expect(() => new Function(script!)).not.toThrow();
 			expect(await patchPaseoWebUi(executable)).toBe(false);

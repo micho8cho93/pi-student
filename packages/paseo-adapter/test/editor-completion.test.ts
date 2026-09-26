@@ -32,7 +32,8 @@ describe("student file completion", () => {
 		expect(script).toContain("AI suggestions send excerpts of the open file");
 		expect(script).toContain("No nearby files are included");
 		expect(script).toContain("The selected model is unavailable. Choose another model.");
-		expect(script).toContain('status.textContent = "Using " + body.model');
+		expect(script).toContain('status.textContent = "Suggestion ready."');
+		expect(script).toContain('advanced.append(node("summary", "Advanced AI settings"), modelLabel, limitLabel)');
 		expect(script).toContain("local(false)");
 		expect(script).toContain("enabled: value.enabled === true");
 	});
