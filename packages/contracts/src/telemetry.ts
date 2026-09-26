@@ -1,5 +1,6 @@
 import type { ClassId, OrganizationId, ProjectId, RequirementId, SessionId, StandardId, UserId } from "./identity.js";
 import type { EffectivePolicy } from "./policy.js";
+import type { LearningEvidenceEvent } from "./learning-evidence.js";
 
 export const ASSISTANCE_LEVELS = ["none", "low", "moderate", "high"] as const;
 export type AssistanceLevel = (typeof ASSISTANCE_LEVELS)[number];
@@ -47,6 +48,8 @@ export interface LearningRecord {
 	};
 	assistance: Record<"planning" | "implementation" | "debugging" | "explanation", AssistanceLevel>;
 	reflection?: StudentReflection;
+	/** Derived cache rebuilt from the local workspace journal at each checkpoint. */
+	evidence?: LearningEvidenceEvent[];
 }
 
 export interface TeacherContext {

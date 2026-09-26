@@ -9,6 +9,8 @@ import {
 import type { LearningStage } from "./types.js";
 import type { LearningIntent } from "./intent.js";
 import { projectContextFacts } from "./project-context.js";
+import { boundedStudentContext, type DecisionEngine } from "@pi-student/decision";
+import { DeterministicDecisionEngine } from "./deterministic-decision-engine.js";
 
 export interface QuestionAssessment {
 	sufficientInformation: boolean;
@@ -63,6 +65,8 @@ const QUESTIONS_BY_STAGE: Record<LearningStage, readonly Omit<StudentQuestion, "
 };
 
 export class StudentQuestionLoop implements StudentQuestionLoopContract {
+	constructor(private readonly decisionEngine: DecisionEngine = new DeterministicDecisionEngine()) {}
+
 	async evaluate(context: QuestionContext): Promise<QuestionDecision> {
 		if (!context.studentMessage?.trim() && !context.previousQuestions?.length) {
 			return { shouldAsk: false, maxQuestions: 0, reason: "There is no substantive student message to explore." };
@@ -75,6 +79,11 @@ export class StudentQuestionLoop implements StudentQuestionLoopContract {
 		if (round >= maxRounds) {
 			return { shouldAsk: false, maxQuestions: 0, reason: "The question loop reached its maximum rounds; continue with the available information." };
 		}
+		const decision = await this.decisionEngine.yesNo(
+			boundedStudentContext("context-sufficiency", context.studentMessage ?? ""),
+			"Is there enough information to move forward with the current educational task?",
+		);
+		if (decision.value === true) return { shouldAsk: false, maxQuestions: 0, reason: "Enough information for the current stage." };
 		return {
 			shouldAsk: true,
 			maxQuestions: context.intent ? 4 : questionBudget(context.studentMessage, round),

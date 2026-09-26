@@ -1,4 +1,4 @@
-import type { LearningRecord, TelemetryEvent, TelemetrySink } from "@pi-student/contracts";
+import type { LearningEvidenceEvent, LearningRecord, TelemetryEvent, TelemetrySink } from "@pi-student/contracts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export class SupabaseTelemetrySink implements TelemetrySink {
@@ -29,6 +29,7 @@ async function uploadLearningRecord(client: SupabaseClient, record: LearningReco
 	if (authError || !auth.user) throw authError ?? new Error("Sign in before syncing learning records.");
 	const session = record.session;
 	if (session.studentId && session.studentId !== auth.user.id) throw new Error("Sign in with the student account that created this learning record.");
+	const evidence = session.projectId && record.evidence ? boundedEvidence(record.evidence, session.id, session.projectId) : undefined;
 	const { error } = await client.from("sessions").upsert({
 		id: session.id, student_id: auth.user.id, class_id: session.classId, project_id: session.projectId ?? null,
 		started_at: session.startedAt, ended_at: session.endedAt, duration_seconds: session.durationSeconds, goal: session.goal ?? null,
@@ -52,4 +53,40 @@ async function uploadLearningRecord(client: SupabaseClient, record: LearningReco
 		const { error: reflectionError } = await client.from("session_reflections").upsert({ session_id: session.id, student_id: auth.user.id, accomplished: record.reflection.accomplished, important_decision: record.reflection.importantDecision, still_unclear: record.reflection.stillUnclear, next_step: record.reflection.nextStep, confirmed_at: record.reflection.confirmedAt }, { onConflict: "session_id" });
 		if (reflectionError) throw reflectionError;
 	}
+	if (evidence) {
+		const { error: evidenceError } = await client.rpc("replace_session_learning_evidence", {
+			session_id_input: session.id, evidence_input: evidence,
+		});
+		if (evidenceError) throw evidenceError;
+	}
+}
+
+const fixedSummaries: Partial<Record<LearningEvidenceEvent["category"], string>> = {
+	plan_approved: "Student plan approved", test_failed: "Test failed", fix_attempted: "Student edited after a failed test",
+	test_passed: "Tests passed", fix_verified: "Tests passed after student's edit", learn_mode_used: "Used Learn Mode for an AI turn",
+	question_completed: "Completed /question practice", reflection_completed: "Student confirmed a reflection",
+};
+const fileSummaries: Partial<Record<LearningEvidenceEvent["category"], RegExp>> = {
+	student_edit: /^Student edited [A-Za-z0-9][A-Za-z0-9._-]{0,79}$/,
+	agent_edit: /^Agent edited [A-Za-z0-9][A-Za-z0-9._-]{0,79}$/,
+	autocomplete_edit: /^Student accepted AI completion in [A-Za-z0-9][A-Za-z0-9._-]{0,79}$/,
+	student_revised_agent_work: /^Student revised agent work in [A-Za-z0-9][A-Za-z0-9._-]{0,79}$/,
+};
+
+/** Rejects corrupted local caches and sends only the fields the replacement RPC accepts. */
+function boundedEvidence(events: LearningEvidenceEvent[], sessionId: string, projectId: string) {
+	if (!Array.isArray(events) || events.length > 200) throw new Error("Invalid learning evidence batch.");
+	return events.map(event => {
+		if (!event || event.sessionId !== sessionId || event.projectId !== projectId || !/^[a-f0-9]{64}$/.test(event.id)
+			|| !Number.isFinite(Date.parse(event.timestamp)) || !["student", "agent", "mixed"].includes(event.actor)
+			|| !["observed", "deterministic", "classified"].includes(event.source)
+			|| (event.source === "classified" ? !(typeof event.confidence === "number" && event.confidence >= 0 && event.confidence <= 1) : event.confidence !== undefined)
+			|| typeof event.summary !== "string" || /(?:secret|credential|token|private.?key|sk-[A-Za-z0-9_-]{8,}|gh[opsu]_[A-Za-z0-9_]{8,})/i.test(event.summary)
+			|| !(fixedSummaries[event.category] === event.summary || fileSummaries[event.category]?.test(event.summary))
+			|| !Array.isArray(event.references) || event.references.length < 1 || event.references.length > 12
+			|| event.references.some(reference => typeof reference !== "string" || !/^([0-9a-f-]{36}:[1-9][0-9]{0,9}|session-reflection:[0-9a-f-]{36})$/.test(reference)))
+			throw new Error("Invalid learning evidence event.");
+		return { id: event.id, timestamp: event.timestamp, category: event.category, actor: event.actor, source: event.source,
+			...(event.confidence === undefined ? {} : { confidence: event.confidence }), summary: event.summary, references: event.references };
+	});
 }

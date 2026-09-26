@@ -109,6 +109,16 @@ button{cursor:pointer}
 .metric-label{font-size:11px;color:var(--muted);margin-top:4px}
 .metric-note{font-size:11px;color:var(--muted);margin-top:2px}
 .panel{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);padding:18px}
+.intervention-item{margin-bottom:12px}
+.intervention-item h2{font-size:16px;margin:12px 0 6px}
+.intervention-item p{margin:7px 0 12px;line-height:1.45}
+.intervention-heading,.intervention-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.intervention-facts{display:flex;gap:12px;flex-wrap:wrap;padding:10px 0;color:var(--muted-strong)}
+.intervention-item details{margin:12px 0}
+.intervention-item summary{cursor:pointer;color:var(--accent-strong)}
+.intervention-item .label{display:block;margin-top:10px}
+.intervention-item textarea{display:block;min-height:64px;margin-top:6px}
+.intervention-actions{justify-content:flex-start;margin-top:10px}
 .panel-head{flex-wrap:wrap;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}
 .panel-head h2,.panel-head h3{font-size:15px;margin:0;color:var(--text);letter-spacing:-.015em}
 .panel-head p{margin:5px 0 0;color:var(--muted);font-size:12px}
@@ -160,6 +170,7 @@ button{cursor:pointer}
 .dialog-subtitle{font-size:12px;color:var(--muted);margin:0}
 .dialog-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 .student-summary{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line-soft);border-radius:8px;margin-bottom:16px}
+.evidence-filters{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}.evidence-filters .label{min-width:190px;flex:1}.evidence-panel{margin-top:18px}.evidence-panel h3{margin:0 0 14px}.evidence-day{margin:16px 0 6px;color:var(--muted)}.evidence-row{display:grid;grid-template-columns:58px minmax(180px,1fr) auto auto;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line-soft)}.evidence-row time{font-variant-numeric:tabular-nums;color:var(--muted)}.evidence-summary{overflow-wrap:anywhere}
 .student-summary .metric-item{padding:12px 14px}
 .student-summary .metric-value{font-size:18px}
 .student-table{max-height:55vh;overflow:auto}

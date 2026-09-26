@@ -12,6 +12,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@pi-student/contracts": "*",
+    "@pi-student/decision": "*",
     "@pi-student/policy": "*",
     "@pi-student/sandbox": "*",
     "@pi-student/shared": "*",

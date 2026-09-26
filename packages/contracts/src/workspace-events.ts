@@ -51,6 +51,8 @@ export type WorkspaceEventInput =
 export type WorkspaceEventType = WorkspaceEventInput["type"];
 
 export type WorkspaceEvent = WorkspaceEventInput & {
+	/** Stable journal provenance across process replays; older records may lack it. */
+	readonly sourceId?: string;
 	/** Monotonic per stream; defines delivery order. */
 	readonly seq: number;
 	readonly at: string;

@@ -47,7 +47,7 @@ export interface WorkspaceActivity {
 export function createWorkspaceActivity(workflow: WorkflowController, sandbox: SandboxRuntime,
 	options: { stream?: WorkspaceEventStream; contextStore?: TeacherContextStore; capabilities?: WorkspaceCapabilityResolver; identity?: WorkspaceSessionIdentity;
 		maps?: WorkspaceMapStore } = {}): WorkspaceActivity {
-	const stream = options.stream ?? new WorkspaceEventStream({ journal: new WorkspaceEventJournal() });
+	const stream = options.stream ?? new WorkspaceEventStream({ journal: new WorkspaceEventJournal(), limit: 5_000 });
 	const maps = options.maps ?? new WorkspaceMapStore();
 	/** Current UI state, with the persisted map (and its on-disk staleness) as the authority for the flowchart. */
 	const currentUi = async (): Promise<WorkspaceUiState> => withMap(stream.ui(scope!), await maps.status(scope!).catch(() => undefined));

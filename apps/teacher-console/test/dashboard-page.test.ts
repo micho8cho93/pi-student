@@ -45,6 +45,16 @@ it("offers teacher class, student, extension, and usage controls", () => {
 	expect(page).toContain("save_governance_policy");
 });
 
+it("exposes class, project, student, day, and session evidence navigation", () => {
+	const page = dashboardPage({ url: "https://example.test", publishableKey: "public" });
+	for (const id of ["project-activity-dialog", "student-dialog", "evidence-project", "evidence-session", "evidence-timeline"]) {
+		expect(page).toContain(`id="${id}"`);
+	}
+	expect(page).toContain("openProjectActivity(project)");
+	expect(page).toContain("db.from('learning_evidence')");
+	expect(page).toContain(".eq('class_id',classId).eq('student_id',studentId)");
+});
+
 describe("teacher dashboard authentication states", () => {
 	const teacher = { id: "t-1", email: "teacher@example.test" };
 	const run = (behavior: Parameters<typeof fakeAuth>[0], href = "https://teacher.test/") => {

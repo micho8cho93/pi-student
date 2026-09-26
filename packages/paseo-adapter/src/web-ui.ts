@@ -425,7 +425,8 @@ export const studentUiScript = (ecosystemPort: number) => `
         };
 
         const mountEcosystem = () => {
-          const host = document.querySelector('#pi-student-progress-tools');
+          // Keep publishing discoverable outside the collapsed project-progress menu.
+          const host = sidebarList();
           if (!host || host.querySelector("#pi-student-ecosystem")) return;
           const mount = element("div");
           mount.id = "pi-student-ecosystem";

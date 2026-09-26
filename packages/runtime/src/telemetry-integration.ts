@@ -15,6 +15,7 @@ import { FileTeacherContextStore, LearningRecordStore, type TeacherContextStore 
 import { SessionRecorder } from "@pi-student/telemetry/session-recorder";
 import { LearningRecordSyncService } from "@pi-student/telemetry/sync-service";
 import type { StudentReflection, TeacherContext } from "@pi-student/telemetry/types";
+import type { LearningEvidenceEvent, LearningRecord } from "@pi-student/contracts";
 import { capabilityState } from "@pi-student/policy/capability-runtime";
 import type { WorkspaceActivityEmitter } from "./workspace-activity.js";
 import { TEST_COMMAND } from "./workspace-events.js";
@@ -35,6 +36,8 @@ export interface StudentRuntimeServices {
 	bindSession?: (session: Pick<SessionManager, "getCwd" | "getSessionId">) => Promise<void>;
 	preferredFallbackModelId?: (provider: string, modelId: string) => string | undefined;
 	recordStore?: LearningRecordStore;
+	/** Rebuilds the bounded evidence cache from authoritative workspace records. */
+	deriveEvidence?: (record: LearningRecord) => Promise<LearningEvidenceEvent[]>;
 }
 
 const personalIdentity: IdentityProvider = { getIdentity: async () => ({ kind: "personal" }) };
@@ -62,6 +65,10 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 			const record = recorder.getRecord();
 			if (!record) return;
 			if (record.policy) record.policyCompliance = { blockedActions: { ...controls.blocked } };
+			if (record.session.projectId && services.deriveEvidence) {
+				try { record.evidence = await services.deriveEvidence(record); }
+				catch { /* A missing journal does not stop the session record. */ }
+			}
 			await store.save(record);
 			if (!services.telemetrySink) return;
 			const result = await new LearningRecordSyncService(store, pending => services.telemetrySink!.record({ type: "learning-record", record: pending })).syncPending();
@@ -103,6 +110,21 @@ export function createTeacherTelemetryExtension(workflow: WorkflowController, sa
 				if (!ctx.isIdle()) { ctx.ui.notify("Wait for the response to finish before syncing.", "info"); return; }
 				await safeCheckpoint(ctx);
 			},
+		});
+		pi.registerCommand("timeline", {
+			description: "Show recent learning evidence from this project",
+			handler: async (_args, ctx) => {
+			const record = recorder.getRecord();
+			if (!record?.session.projectId || !services.deriveEvidence) {
+				ctx.ui.notify("Choose a class project to see its activity timeline.", "info");
+				return;
+			}
+			record.session.endedAt = new Date().toISOString();
+			const evidence = await services.deriveEvidence(record).catch(() => []);
+			const recent = evidence.slice(-20);
+			ctx.ui.notify(recent.length ? recent.map(item => `${new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}  ${item.summary}`).join("\n")
+				: "No learning evidence recorded in this session yet.", "info");
+		},
 		});
 		pi.on("agent_end", async (_event, ctx) => { await safeCheckpoint(ctx); });
 		const unsubscribeWorkflow = workflow.onChange(() => {

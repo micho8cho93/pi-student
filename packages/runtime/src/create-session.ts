@@ -26,7 +26,8 @@ import { WorkflowController } from "@pi-student/education/workflow-controller";
 import { StudentQuestionLoop } from "@pi-student/education/student-question-loop";
 import { displayLearningStage } from "@pi-student/education/stage";
 import { inspectProjectContext, projectContextFacts, type ProjectContext } from "@pi-student/education/project-context";
-import { routeIntent, type IntentRoute } from "@pi-student/education/intent";
+import { type IntentRoute } from "@pi-student/education/intent";
+import { DeterministicDecisionEngine, type EducationalDecisionEngine } from "@pi-student/education/deterministic-decision-engine";
 import { createStudentAskExtension } from "./student-ask.js";
 import { createLearningStateExtension } from "./learning-state.js";
 import { createStudentPlanExtension } from "./student-plan.js";
@@ -55,6 +56,8 @@ import { createLearningSession, type LearningSession } from "@pi-student/educati
 import { capabilityState, guardCapabilitySession } from "@pi-student/policy/capability-runtime";
 import { createProjectCapabilitiesExtension } from "./project-capabilities.js";
 import { createWorkspaceActivity, type WorkspaceActivityEmitter } from "./workspace-activity.js";
+import { deriveLearningEvidence } from "@pi-student/education/learning-evidence";
+import { workspaceEventKey } from "./workspace-events.js";
 import { formatAssistanceFallback } from "./assistance.js";
 import { resolveStudentCapabilities } from "./student-workspace.js";
 import { allowedReasoningLevels } from "@pi-student/policy/capability-policy";
@@ -134,6 +137,16 @@ export async function createLearningAgentRuntime(
 					stage: activityWorkflow.getStage(), sandbox: { running: sandboxRuntime.isRunning() } });
 			},
 		});
+		const evidenceServices = options.services && { ...options.services, deriveEvidence: async (record: import("@pi-student/contracts").LearningRecord) => {
+			const scope = activity.scope();
+			if (!scope || !scope.projectId || scope.projectId !== record.session.projectId || scope.userId !== record.session.studentId) return [];
+			await activity.stream.refresh(scope);
+			return deriveLearningEvidence(activity.stream.events(scope), {
+				projectId: scope.projectId, workspaceKey: workspaceEventKey(scope), sessionId: record.session.id, workspaceSessionId: scope.sessionId,
+				startedAt: record.session.startedAt, endedAt: record.session.endedAt,
+				reflectionConfirmedAt: record.reflection?.confirmedAt,
+			});
+		} };
 		const services = await createAgentSessionServices({
 			cwd: sandboxCwd,
 			agentDir,
@@ -143,7 +156,7 @@ export async function createLearningAgentRuntime(
 				extensionFactories: [
 					createSandboxExtension(sandboxRuntime),
 					createLearningExtension(workflow, modelRuntime, sandboxRuntime, options.services, activity.emit),
-					createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services, activity.emit,
+					createTeacherTelemetryExtension(workflow, sandboxRuntime, evidenceServices, activity.emit,
 						async reason => formatAssistanceFallback(await activity.actions({ exhausted: reason }) ?? [], reason)),
 					createApprovedExtensions(options.services, () => workflow.getStage()),
 					activity.extension,
@@ -225,7 +238,8 @@ export async function createLearningAgentRuntime(
 
 function createLearningExtension(workflow: WorkflowController, modelRuntime: ModelRuntime, sandbox: SandboxRuntime, services?: StudentRuntimeServices,
 	emitActivity?: WorkspaceActivityEmitter): ExtensionFactory {
-	const questionLoop = new StudentQuestionLoop();
+	const decisionEngine: EducationalDecisionEngine = new DeterministicDecisionEngine();
+	const questionLoop = new StudentQuestionLoop(decisionEngine);
 	return (pi) => {
 		const exploration = registerLearnMode(pi, workflow, sandbox, undefined, {
 			onQuestionCompleted: question => emitActivity?.("question", { type: "question.completed", difficulty: question.difficulty, topic: question.topic }),
@@ -273,7 +287,7 @@ function createLearningExtension(workflow: WorkflowController, modelRuntime: Mod
 		});
 		const prepareRoutingContext = async (studentMessage: string) => {
 			activeProjectContext = await inspectProjectContext(sandbox);
-			activeRoute = routeIntent(studentMessage, {
+			activeRoute = decisionEngine.routeIntent(studentMessage, {
 				projectContext: activeProjectContext,
 				currentIntent: workflow.getIntent(),
 			});
@@ -632,15 +646,32 @@ export async function createLearningAgentSession(
 	const sessionModel = executionContext
 		? (await selectExecutionModel(runtime, executionContext, model ? `${model.provider}/${model.id}` : undefined, sessionManager)).model
 		: model;
+	const activity = createWorkspaceActivity(workflow, sandboxRuntime, {
+		contextStore: options.services?.contextStore,
+		identity: async () => {
+			const student = (await options.services?.executionContext?.().catch(() => undefined))?.identity.userId;
+			return { ...(student ? { userId: student } : {}), sessionId: sessionManager.getSessionId() };
+		},
+	});
+	const evidenceServices = options.services && { ...options.services, deriveEvidence: async (record: import("@pi-student/contracts").LearningRecord) => {
+		const scope = activity.scope();
+		if (!scope?.projectId || scope.projectId !== record.session.projectId || scope.userId !== record.session.studentId) return [];
+		await activity.stream.refresh(scope);
+		return deriveLearningEvidence(activity.stream.events(scope), {
+			projectId: scope.projectId, workspaceKey: workspaceEventKey(scope), sessionId: record.session.id, workspaceSessionId: scope.sessionId,
+			startedAt: record.session.startedAt, endedAt: record.session.endedAt, reflectionConfirmedAt: record.reflection?.confirmedAt,
+		});
+	} };
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: sandboxRuntime.getWorkspacePath(),
 		agentDir: getAgentDir(),
 		noSkills: true,
 		extensionFactories: [
 			createSandboxExtension(sandboxRuntime),
-			createLearningExtension(workflow, runtime, sandboxRuntime, options.services),
-			createTeacherTelemetryExtension(workflow, sandboxRuntime, options.services),
+			createLearningExtension(workflow, runtime, sandboxRuntime, options.services, activity.emit),
+			createTeacherTelemetryExtension(workflow, sandboxRuntime, evidenceServices, activity.emit),
 			createApprovedExtensions(options.services, () => workflow.getStage()),
+			activity.extension,
 		],
 		themesOverride: addBundledThemes,
 	});

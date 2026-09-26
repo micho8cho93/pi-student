@@ -1,0 +1,387 @@
+{
+  "model": "local-receptron-laya-onnx-english-fp32",
+  "confidencePolicy": {
+    "high": 0.9,
+    "medium": 0.7
+  },
+  "intent": {
+    "count": 24,
+    "baselineAccuracy": {
+      "correct": 19,
+      "total": 20
+    },
+    "layaRawAccuracy": {
+      "correct": 17,
+      "total": 20
+    },
+    "layaAcceptedAccuracy": {
+      "correct": 2,
+      "total": 2
+    },
+    "fallbackAccuracy": {
+      "correct": 19,
+      "total": 20
+    },
+    "disagreements": 6,
+    "fallbackCount": 22
+  },
+  "sufficiencySummary": {
+    "count": 8,
+    "baselineAccuracy": {
+      "correct": 4,
+      "total": 8
+    },
+    "layaRawAccuracy": {
+      "correct": 3,
+      "total": 8
+    },
+    "layaAcceptedAccuracy": {
+      "correct": 0,
+      "total": 1
+    },
+    "fallbackAccuracy": {
+      "correct": 4,
+      "total": 8
+    },
+    "disagreements": 1,
+    "fallbackCount": 7
+  },
+  "latencyMs": {
+    "min": 537.0732500000013,
+    "median": 656.5825000000004,
+    "p95": 2248.0224579999995,
+    "max": 6263.365416
+  },
+  "intents": [
+    {
+      "expected": "BUILD",
+      "baseline": "BUILD",
+      "laya": "BUILD",
+      "accepted": null,
+      "fallbackOutcome": "BUILD",
+      "confidence": 0.8796,
+      "latencyMs": 6263.365416,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "BUILD",
+      "baseline": "BUILD",
+      "laya": "BUILD",
+      "accepted": null,
+      "fallbackOutcome": "BUILD",
+      "confidence": 0.7317,
+      "latencyMs": 599.4842079999999,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "BUILD",
+      "baseline": "BUILD",
+      "laya": "BUILD",
+      "accepted": null,
+      "fallbackOutcome": "BUILD",
+      "confidence": 0.3763,
+      "latencyMs": 598.1836249999997,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "BUILD",
+      "baseline": "BUILD",
+      "laya": "BUILD",
+      "accepted": null,
+      "fallbackOutcome": "BUILD",
+      "confidence": 0.4132,
+      "latencyMs": 747.0099580000006,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "TUTOR",
+      "baseline": "TUTOR",
+      "laya": "TUTOR",
+      "accepted": null,
+      "fallbackOutcome": "TUTOR",
+      "confidence": 0.529,
+      "latencyMs": 656.5825000000004,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "TUTOR",
+      "baseline": "TUTOR",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "TUTOR",
+      "confidence": 0.553,
+      "latencyMs": 601.3771250000009,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "TUTOR",
+      "baseline": "TUTOR",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "TUTOR",
+      "confidence": 0.727,
+      "latencyMs": 723.6675830000004,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "TUTOR",
+      "baseline": null,
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": null,
+      "confidence": 0.3088,
+      "latencyMs": 659.3774580000008,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "EXPLAIN",
+      "baseline": "EXPLAIN",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "EXPLAIN",
+      "confidence": 0.7207,
+      "latencyMs": 734.9072919999999,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "EXPLAIN",
+      "baseline": "EXPLAIN",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "EXPLAIN",
+      "confidence": 0.7619,
+      "latencyMs": 630.6392080000005,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "EXPLAIN",
+      "baseline": "EXPLAIN",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "EXPLAIN",
+      "confidence": 0.8012,
+      "latencyMs": 728.2982499999998,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "EXPLAIN",
+      "baseline": "EXPLAIN",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "EXPLAIN",
+      "confidence": 0.5034,
+      "latencyMs": 634.9540830000005,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "DEBUG",
+      "baseline": "DEBUG",
+      "laya": "DEBUG",
+      "accepted": null,
+      "fallbackOutcome": "DEBUG",
+      "confidence": 0.8926,
+      "latencyMs": 612.6996249999993,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "DEBUG",
+      "baseline": "DEBUG",
+      "laya": "DEBUG",
+      "accepted": null,
+      "fallbackOutcome": "DEBUG",
+      "confidence": 0.6713,
+      "latencyMs": 632.9477499999994,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "DEBUG",
+      "baseline": "DEBUG",
+      "laya": "DEBUG",
+      "accepted": null,
+      "fallbackOutcome": "DEBUG",
+      "confidence": 0.3893,
+      "latencyMs": 586.696750000001,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "DEBUG",
+      "baseline": "DEBUG",
+      "laya": "DEBUG",
+      "accepted": null,
+      "fallbackOutcome": "DEBUG",
+      "confidence": 0.752,
+      "latencyMs": 634.7750830000004,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "CHECK",
+      "baseline": "CHECK",
+      "laya": "CHECK",
+      "accepted": "CHECK",
+      "fallbackOutcome": "CHECK",
+      "confidence": 0.9465,
+      "latencyMs": 630.3877080000002,
+      "fallbackUsed": false
+    },
+    {
+      "expected": "CHECK",
+      "baseline": "CHECK",
+      "laya": "CHECK",
+      "accepted": "CHECK",
+      "fallbackOutcome": "CHECK",
+      "confidence": 0.9393,
+      "latencyMs": 689.3824999999997,
+      "fallbackUsed": false
+    },
+    {
+      "expected": "CHECK",
+      "baseline": "CHECK",
+      "laya": "CHECK",
+      "accepted": null,
+      "fallbackOutcome": "CHECK",
+      "confidence": 0.8935,
+      "latencyMs": 641.5787910000035,
+      "fallbackUsed": true
+    },
+    {
+      "expected": "CHECK",
+      "baseline": "CHECK",
+      "laya": "CHECK",
+      "accepted": null,
+      "fallbackOutcome": "CHECK",
+      "confidence": 0.7924,
+      "latencyMs": 574.5452499999992,
+      "fallbackUsed": true
+    },
+    {
+      "expected": null,
+      "baseline": null,
+      "laya": "BUILD",
+      "accepted": null,
+      "fallbackOutcome": null,
+      "confidence": 0.3,
+      "latencyMs": 554.8471250000002,
+      "fallbackUsed": true
+    },
+    {
+      "expected": null,
+      "baseline": "EXPLAIN",
+      "laya": "EXPLAIN",
+      "accepted": null,
+      "fallbackOutcome": "EXPLAIN",
+      "confidence": 0.3619,
+      "latencyMs": 802.7942089999997,
+      "fallbackUsed": true
+    },
+    {
+      "expected": null,
+      "baseline": null,
+      "laya": "DEBUG",
+      "accepted": null,
+      "fallbackOutcome": null,
+      "confidence": 0.7711,
+      "latencyMs": 1680.3574999999983,
+      "fallbackUsed": true
+    },
+    {
+      "expected": null,
+      "baseline": null,
+      "laya": "BUILD",
+      "accepted": null,
+      "fallbackOutcome": null,
+      "confidence": 0.427,
+      "latencyMs": 1351.715250000001,
+      "fallbackUsed": true
+    }
+  ],
+  "sufficiency": [
+    {
+      "expected": false,
+      "baseline": false,
+      "laya": true,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.6518,
+      "latencyMs": 651.7075000000004,
+      "fallbackUsed": true
+    },
+    {
+      "expected": true,
+      "baseline": false,
+      "laya": false,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.8036,
+      "latencyMs": 937.1575000000012,
+      "fallbackUsed": true
+    },
+    {
+      "expected": false,
+      "baseline": false,
+      "laya": false,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.8188,
+      "latencyMs": 564.6177920000009,
+      "fallbackUsed": true
+    },
+    {
+      "expected": true,
+      "baseline": false,
+      "laya": false,
+      "accepted": false,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.9004,
+      "latencyMs": 1497.1472920000015,
+      "fallbackUsed": false
+    },
+    {
+      "expected": true,
+      "baseline": false,
+      "laya": false,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.7041999999999999,
+      "latencyMs": 537.0732500000013,
+      "fallbackUsed": true
+    },
+    {
+      "expected": false,
+      "baseline": false,
+      "laya": false,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.6044,
+      "latencyMs": 780.3491670000003,
+      "fallbackUsed": true
+    },
+    {
+      "expected": true,
+      "baseline": false,
+      "laya": false,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.8721,
+      "latencyMs": 2248.0224579999995,
+      "fallbackUsed": true
+    },
+    {
+      "expected": false,
+      "baseline": false,
+      "laya": false,
+      "accepted": null,
+      "fallback": false,
+      "missingCategory": null,
+      "confidence": 0.8795,
+      "latencyMs": 1991.3231669999986,
+      "fallbackUsed": true
+    }
+  ]
+}

@@ -67,6 +67,21 @@ describe("workspace event stream", () => {
 		expect(() => bridge.emit(a, "editor", { type: "agent.files_changed", files: [{ file: "x.ts", kind: "modified" }] }, STUDENT_SURFACE_EVENTS)).toThrow("not supported");
 	});
 
+	it("keeps source IDs stable when another process replays the journal", async () => {
+		const scope = { projectPath: await directory() };
+		const journal = new WorkspaceEventJournal(await directory("pi-journal-"));
+		journals.push(journal);
+		const writer = new WorkspaceEventStream({ journal });
+		const original = writer.emit(scope, "editor", { type: "file.changed", file: "src/game.py" });
+		await journal.flush();
+		const reader = new WorkspaceEventStream({ journal });
+		reader.emit(scope, "editor", { type: "file.opened", file: "src/other.py" });
+		await reader.refresh(scope);
+		const replayed = reader.events(scope).find(item => item.type === "file.changed");
+		expect(replayed?.sourceId).toBe(original.sourceId);
+		expect(replayed?.seq).not.toBe(original.seq);
+	});
+
 	it("binds a class selection only to the workspace it was selected for", async () => {
 		const project = await directory();
 		const other = await directory();

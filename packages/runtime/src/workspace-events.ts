@@ -275,7 +275,7 @@ export function reduceSessionState(state: WorkspaceSessionState, event: Workspac
 			return { ...state, budget: { ...state.budget, exhausted: { reason: event.reason, lane, at: event.at } } };
 		}
 		case "learning.progress": {
-			const { type: _type, seq: _seq, at, workspace: _workspace, source: _source, origin: _origin, session: _session, sensitive: _sensitive, ...progress } = event;
+			const { type: _type, seq: _seq, sourceId: _sourceId, at, workspace: _workspace, source: _source, origin: _origin, session: _session, sensitive: _sensitive, ...progress } = event;
 			return { ...state, progress: { ...progress, at } };
 		}
 		default: return state;
@@ -310,7 +310,7 @@ export function reduceWorkspaceUi(ui: WorkspaceUiState, event: WorkspaceEvent): 
 			...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }), ...(event.type === "test.failed" && event.summary ? { summary: event.summary } : {}),
 			...(event.type === "test.failed" && event.failedTests ? { failedTests: event.failedTests } : {}), actor, at: event.at } } }, stale: [] };
 		case "flowchart.node_selected": {
-			const { type: _type, seq: _seq, at: _at, workspace: _workspace, source: _source, origin: _origin, session: _session, sensitive: _sensitive, ...selectedNode } = event;
+			const { type: _type, seq: _seq, sourceId: _sourceId, at: _at, workspace: _workspace, source: _source, origin: _origin, session: _session, sensitive: _sensitive, ...selectedNode } = event;
 			return { ui: { ...ui, flowchart: { ...(ui.flowchart ?? { stale: false }), selectedNode } }, stale: [] };
 		}
 		case "flowchart.node_cleared": {
@@ -405,7 +405,8 @@ export class WorkspaceEventStream {
 		const scoped = SESSION_SCOPED_EVENTS.has(parsed.type);
 		if (scoped && !validSession(scope.sessionId)) throw new Error("This workspace event belongs to a Chat session, and no session is bound.");
 		const session = scoped ? { session: scope.sessionId! } : {};
-		const event: WorkspaceEvent = { ...parsed, seq: ++this.seq, at: (this.options.now?.() ?? new Date()).toISOString(), workspace: workspaceEventKey(record.scope), source, origin: this.origin, ...session };
+		const seq = ++this.seq;
+		const event: WorkspaceEvent = { ...parsed, seq, sourceId: `${this.origin}:${seq}`, at: (this.options.now?.() ?? new Date()).toISOString(), workspace: workspaceEventKey(record.scope), source, origin: this.origin, ...session };
 		this.enqueue(record, event, true);
 		return event;
 	}
@@ -420,7 +421,7 @@ export class WorkspaceEventStream {
 		for (const line of await journal.read(key)) {
 			const value = line as Partial<WorkspaceEvent>;
 			const id = `${value.origin}:${value.seq}`;
-			if (value.workspace !== key || value.origin === this.origin || typeof value.origin !== "string" || record.seen.has(id)) continue;
+			if (value.workspace !== key || value.origin === this.origin || typeof value.origin !== "string" || !Number.isSafeInteger(value.seq) || (value.seq ?? 0) <= 0 || record.seen.has(id)) continue;
 			record.seen.add(id);
 			const at = typeof value.at === "string" ? Date.parse(value.at) : NaN;
 			if (!Number.isFinite(at) || at < oldest) continue;
@@ -432,7 +433,7 @@ export class WorkspaceEventStream {
 			const scoped = SESSION_SCOPED_EVENTS.has(parsed.type);
 			if (scoped ? !validSession(value.session) : value.session !== undefined) continue;
 			const session = scoped ? { session: value.session as string } : {};
-			this.enqueue(record, { ...parsed, seq: ++this.seq, at: new Date(at).toISOString(), workspace: key, source, origin: value.origin, ...session }, false);
+			this.enqueue(record, { ...parsed, seq: ++this.seq, sourceId: id, at: new Date(at).toISOString(), workspace: key, source, origin: value.origin, ...session }, false);
 		}
 		if (record.seen.size > 5_000) record.seen = new Set([...record.seen].slice(-2_500));
 	}
