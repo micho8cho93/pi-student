@@ -1,4 +1,4 @@
-import { failedModelHealth, workspaceModelHealthReporter } from "@pi-student/runtime/workspace-model-health";
+import { workspaceModelHealthReporter } from "@pi-student/runtime/workspace-model-health";
 import { LearnSettingsStore } from "@pi-student/education/settings";
 import { resolveLearnScaffolding } from "@pi-student/education/learn-scaffolding";
 import { resolveLearnSession } from "./paseo-session.js";
@@ -378,7 +378,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				try { return json(response, 200, await job); }
 				catch (error) {
 					// Say what still works (an existing map, editing, terminal) instead of only reporting the failure.
-					const health = error instanceof FlowchartModelError ? failedModelHealth(error) : undefined;
+					const health = error instanceof FlowchartModelError ? error.health : undefined;
 					const status = error instanceof CompletionError ? error.status : error instanceof FlowchartModelError ? 502 : 500;
 					return json(response, status, { error: safeError(error), map: await mapStore.status(scope).catch(() => NO_MAP),
 						...await workspaceActions(activeProject, scope, { workspaceId, agentId: url.searchParams.get("agentId") }, !scope.sessionId && health ? { model: { available: false, health } } : {}) });

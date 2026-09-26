@@ -179,13 +179,14 @@ export interface WorkspaceLearningProgress {
 	verificationPassed: boolean;
 }
 
-/**
- * Transient state of one Chat session, reduced from its session-scoped events.
- * It is a publication of the Chat process's authorities (WorkflowController,
- * CapabilityState, observed model responses), never a second store of them.
- */
+/** Metadata-only outcome of a trusted model request. No raw error details. */
 export type WorkspaceModelHealth = { status: "available" | "provider_unavailable" | "model_unavailable" | "authentication_failure" | "transient_failure" };
 
+/**
+ * Transient state of one Chat session, reduced from its session-scoped events.
+ * It is a publication of the session's execution authorities (WorkflowController,
+ * CapabilityState, observed model responses), never a second store of them.
+ */
 export interface WorkspaceSessionState {
 	learn?: { enabled: boolean; at: string };
 	model?: { selected?: string; health?: WorkspaceModelHealth; available?: boolean; toolUse?: boolean; at: string };

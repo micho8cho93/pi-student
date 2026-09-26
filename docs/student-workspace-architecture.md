@@ -128,4 +128,4 @@ Tests are hermetic: `tooling/vitest-hermetic.ts` gives every vitest run empty Pi
 
 ## Validation
 
-See the change summary for commands and results. Database tests were run against a local Postgres 15 with pgTAP and a Supabase auth/role shim that mirrors what the migrations and tests use; the real Supabase image is only exercised in the `supabase / rls` CI job.
+Local validation uses `npm run build`, `npm run typecheck`, `npm test`, `npm run check:boundaries` and `npm run check:versions`. The required hosted CI gates additionally run the real Supabase migration/lint/RLS suite and the Gondolin VM sandbox/network smoke test. Stabilization signoff requires every required job, including `ci-passed`, to be green for the current change; a local database shim or an earlier green commit is not a substitute. The model-health change and its current checks are tracked in [PR #2](https://github.com/micho8cho93/pi-student/pull/2).
