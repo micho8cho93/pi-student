@@ -36,10 +36,10 @@ import { SupabaseExecutionScopeProvider } from "@pi-student/supabase-adapter/exe
 import { SupabaseInstitutionalEnvironmentProvider } from "@pi-student/supabase-adapter/institutional-environment";
 import { SandboxManager } from "@pi-student/sandbox/sandbox-manager";
 import { GondolinSandboxProvider } from "@pi-student/sandbox-gondolin/provider";
-import type { ExecutionContext, ModelAdmissionGate } from "@pi-student/contracts";
+import type { ExecutionContext, ModelAdmissionDecision, ModelAdmissionGate, ModelAdmissionProvider } from "@pi-student/contracts";
 import { assertExecutionEnvironment, authorizeExtension } from "@pi-student/runtime/extension-authorization";
 import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, studentEventSurface, TEST_COMMAND, workspaceEventKey, WorkspaceEventJournal, WorkspaceEventStream,
-	type WorkspaceEventScope } from "@pi-student/runtime/workspace-events";
+	WorkspaceIdentityRequiredError, type WorkspaceEventScope } from "@pi-student/runtime/workspace-events";
 import { createStudentWorkspace, resolveStudentCapabilities, unavailableStudentCapabilities, type StudentCapabilityInputs } from "@pi-student/runtime/student-workspace";
 import { buildStudentWorkspaceSnapshot, sessionCapabilitySignals } from "@pi-student/runtime/workspace-snapshot";
 import { WorkspaceMapStore } from "@pi-student/runtime/workspace-map-store";
@@ -50,9 +50,21 @@ export const ECOSYSTEM_BRIDGE_PORT = 6769;
 const GUI_ORIGIN = "http://127.0.0.1:6767";
 const NO_MAP: WorkspaceMapStatus = { available: false, stale: false, staleFiles: [] };
 
+/**
+ * A resolved model environment. `admission` is the host's request admission for the
+ * project; the bridge turns it into the enforcing gate and derives the budget
+ * signals surfaces show from its decisions, so there is no second budget authority.
+ */
+export interface EcosystemModelExecution extends ModelExecutionEnvironment {
+	admission?: Pick<ModelAdmissionProvider, "check">;
+}
+
 export interface EcosystemBridgeOptions {
-	resolveModelExecution?: (root: string) => Promise<ModelExecutionEnvironment>;
-	/** The signed-in student. Keys workspace activity and maps so students sharing a machine never see each other's. */
+	resolveModelExecution?: (root: string) => Promise<EcosystemModelExecution>;
+	/**
+	 * The signed-in student, from the trusted authentication layer. Keys workspace activity and maps so
+	 * students sharing a machine never see each other's. A managed project without one is unavailable.
+	 */
 	resolveIdentity?: () => Promise<{ userId?: string }>;
 	mapStore?: WorkspaceMapStore;
 	/** Origin of the Paseo GUI allowed to call the bridge. Only tests serve the GUI elsewhere. */
@@ -88,6 +100,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 	 * Project scope for the signed-in student, plus the Chat session behind `agentId`
 	 * when the GUI names one. The session is resolved from Paseo's agent registry,
 	 * never accepted from the browser; an unknown agent yields a session-less view.
+	 * Throws WorkspaceIdentityRequiredError for a managed project without a resolved student.
 	 */
 	const eventScope = async (root: string, workspaceId?: string | null, agentId?: string | null) => {
 		const sessionId = workspaceId && agentId ? await resolveLearnSession(paseoHome, root, workspaceId, agentId).catch(() => undefined) : undefined;
@@ -101,9 +114,36 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 		await providerRuntime.refresh({ allowNetwork: false });
 		return providerRuntime;
 	};
-	const completionSessionId = randomUUID();
+	/**
+	 * Latest admission outcome per student project, keyed like workspace state (project and
+	 * authenticated student, never a Chat session): institutional limits apply to every
+	 * session of that student and never to another student. Presentation only: admission
+	 * itself stays the enforcement boundary. Session limits come from each Chat's own events.
+	 */
 	const admissionSignals = new Map<string, Pick<StudentCapabilityInputs, "exhausted" | "agentExhausted" | "warning">>();
-	const resolveModelExecution = options.resolveModelExecution ?? (async (root: string) => {
+	/** One admission session per student project for GUI-side AI (autocomplete, maps), so students never share one. */
+	const completionSessions = new Map<string, string>();
+	const admissionKey = (context: ExecutionContext) => workspaceEventKey({ projectPath: context.workspacePath, projectId: context.projectId,
+		organizationId: context.organizationId, userId: context.identity.userId });
+	const admitted = ({ admission, ...environment }: EcosystemModelExecution): ModelExecutionEnvironment => {
+		if (!admission) return environment;
+		const { context, beforeRequest: next } = environment;
+		const key = admissionKey(context);
+		const sessionId = completionSessions.get(key) ?? randomUUID();
+		completionSessions.set(key, sessionId);
+		const beforeRequest: ModelAdmissionGate = async (provider, modelId, thinking, purpose) => {
+			if (context.projectId) {
+				const decision = await admission.check(context.projectId, provider, modelId, thinking, sessionId, purpose);
+				// Remember the latest decision so workspace actions can show budget lanes without another check.
+				admissionSignals.set(key, admissionSignal(decision));
+				if (decision.blocked) throw new CompletionError(purpose === "autocomplete" ? "AI completion is paused by the project's model approval or AI budget."
+					: "This model is blocked by the project approval or budget.", 403);
+			}
+			await next?.(provider, modelId, thinking, purpose);
+		};
+		return { ...environment, beforeRequest };
+	};
+	const resolveEnvironment = options.resolveModelExecution ?? (async (root: string): Promise<EcosystemModelExecution> => {
 		const runtime = await getProviderRuntime();
 		const context = await readTeacherContext();
 		const config = readSupabaseConfig();
@@ -127,19 +167,9 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			? { ...resolvedContext, environment: { ...resolvedContext.environment, capabilities: localEnvironment.capabilities } }
 			: resolvedContext;
 		const admission = new SupabaseModelAdmissionProvider(client, (token, sessionId, thinking) => direct.refreshHostedToken(token, sessionId, thinking));
-		const admissionScope = workspaceEventKey({ projectPath: executionContext.workspacePath, projectId: executionContext.projectId, organizationId: executionContext.organizationId });
-		const beforeRequest: ModelAdmissionGate = async (provider, modelId, thinking, purpose) => {
-			if (!executionContext.projectId) return;
-			const decision = await admission.check(executionContext.projectId, provider, modelId, thinking, completionSessionId, purpose);
-			// Remember the latest decision so workspace actions can show budget lanes without another check.
-			admissionSignals.set(admissionScope, decision.blocked ? { exhausted: "The AI budget or model approval blocks this request." }
-				: decision.agentBlocked ? { agentExhausted: "The AI implementation budget has been reached." }
-					: decision.warning ? { warning: "AI usage is approaching its limit." } : {});
-			if (decision.blocked) throw new CompletionError(purpose === "autocomplete" ? "AI completion is paused by the project's model approval or AI budget."
-				: "This model is blocked by the project approval or budget.", 403);
-		};
-		return { runtime, context: executionContext, beforeRequest };
+		return { runtime, context: executionContext, admission };
 	});
+	const resolveModelExecution = async (root: string) => admitted(await resolveEnvironment(root));
 	const completions = new EditorCompletionService(resolveModelExecution);
 	/**
 	 * The one live StudentWorkspaceSnapshot for a GUI request. Every GUI answer about
@@ -149,17 +179,20 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 	/** Authorized context and approved, configured models: the expensive (control-plane) inputs of a snapshot. */
 	const resolveAccess = (root: string): Promise<{ context: ExecutionContext; models: string[] } | { error: unknown }> => resolveModelExecution(root)
 		.then(async ({ runtime, context }) => ({ context, models: (await availableExecutionModels(runtime, context)).map(model => `${model.provider}/${model.id}`) }), error => ({ error }));
-	const workspaceSnapshot = async (root: string, scope: WorkspaceEventScope, request: { workspaceId?: string | null; agentId?: string | null } = {},
-		observed: Pick<StudentCapabilityInputs, "model"> = {}, access = resolveAccess(root)): Promise<StudentWorkspaceSnapshot> => {
+	const workspaceSnapshot = async (root: string, scope: WorkspaceEventScope | WorkspaceIdentityRequiredError, request: { workspaceId?: string | null; agentId?: string | null } = {},
+		observed: Pick<StudentCapabilityInputs, "model"> = {}, access?: ReturnType<typeof resolveAccess>): Promise<StudentWorkspaceSnapshot> => {
+		// A managed project without a resolved student: no journal, map, session or saved progress is read.
+		if (scope instanceof WorkspaceIdentityRequiredError) return identityRequiredSnapshot(scope);
 		await workspaceEvents.refresh(scope).catch(() => {});
 		const ui = workspaceEvents.ui(scope);
 		const session = workspaceEvents.session(scope);
 		const { sessionId: _session, ...project } = scope;
-		const resolved = await access;
+		const resolved = await (access ?? resolveAccess(root));
 		const workspace = await Promise.resolve().then(() => {
 			if ("error" in resolved) throw resolved.error;
+			// createStudentWorkspace rejects a scope (project or student) that differs from the authorized context.
 			return createStudentWorkspace(resolved.context, { claimed: project, ui, capabilities: resolveStudentCapabilities(resolved.context,
-				{ ...admissionSignals.get(workspaceEventKey(scope)), ...sessionCapabilitySignals(session), ...observed, models: resolved.models }) });
+				{ ...admissionSignals.get(admissionKey(resolved.context)), ...sessionCapabilitySignals(session), ...observed, models: resolved.models }) });
 		}).catch(error => ({ ui, capabilities: unavailableStudentCapabilities(safeError(error), error instanceof CompletionError && error.status === 403 ? "budget_exhausted" : "provider_unavailable") }));
 		const [map, savedProgress, learnSetting] = await Promise.all([
 			mapStore.status(scope).catch(() => NO_MAP),
@@ -169,11 +202,15 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 		return buildStudentWorkspaceSnapshot({ workspace: { ...workspace, scope: { ...("scope" in workspace ? workspace.scope : { projectPath: scope.projectPath }), sessionId: scope.sessionId } },
 			session, savedProgress, learnSetting, map });
 	};
-	const workspaceActions = async (root: string, scope: WorkspaceEventScope, request: { workspaceId?: string | null; agentId?: string | null } = {},
+	const workspaceActions = async (root: string, scope: WorkspaceEventScope | WorkspaceIdentityRequiredError, request: { workspaceId?: string | null; agentId?: string | null } = {},
 		observed: Pick<StudentCapabilityInputs, "model"> = {}) => {
 		const snapshot = await workspaceSnapshot(root, scope, request, observed);
-		return { actions: snapshot.actions, fallback: snapshot.fallback, budget: snapshot.budget, managed: snapshot.scope.managed };
+		return { actions: snapshot.actions, fallback: snapshot.fallback, budget: snapshot.budget, managed: snapshot.scope.managed,
+			...(snapshot.scope.identityRequired ? { workspace: "identity_required" as const } : {}) };
 	};
+	/** The scope for a snapshot, or the reason a managed workspace is unavailable. */
+	const snapshotScope = (root: string, workspaceId?: string | null, agentId?: string | null) => eventScope(root, workspaceId, agentId)
+		.catch(error => { if (error instanceof WorkspaceIdentityRequiredError) return error; throw error; });
 	const requireApprovedProvider = async (providerId: string) => {
 		const approved = await approvedProvidersForCurrentProject();
 		if (approved && !approved.includes(providerId)) throw new Error("This model provider is not approved for the selected class project.");
@@ -225,7 +262,10 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 							? { type: "test.passed", command: event.command, exitCode: 0 }
 							: { type: "test.failed", command: event.command, exitCode: event.exitCode, ...(typeof body.summary === "string" ? { summary: body.summary } : {}) });
 					}
-				} catch (error) { return json(response, 400, { error: safeError(error) }); }
+				} catch (error) {
+					if (error instanceof WorkspaceIdentityRequiredError) throw error;
+					return json(response, 400, { error: safeError(error) });
+				}
 				await eventJournal.flush();
 				return json(response, 202, { accepted: true });
 			}
@@ -243,14 +283,14 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
 				const workspaceId = url.searchParams.get("workspaceId")!, agentId = url.searchParams.get("agentId");
 				const root = await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath);
-				const scope = await eventScope(root, workspaceId, agentId);
+				const scope = await snapshotScope(root, workspaceId, agentId);
 				return json(response, 200, await workspaceActions(root, scope, { workspaceId, agentId }, url.searchParams.get("model") === "unavailable" ? { model: { available: false } } : {}));
 			}
 			if (request.method === "GET" && url.pathname === "/workspace-snapshot") {
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
 				const workspaceId = url.searchParams.get("workspaceId")!, agentId = url.searchParams.get("agentId");
 				const root = await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath);
-				const scope = await eventScope(root, workspaceId, agentId);
+				const scope = await snapshotScope(root, workspaceId, agentId);
 				// ?since=<revision> waits (bounded) until something the surfaces show changes, so the GUI can follow the workspace live.
 				const since = url.searchParams.get("since");
 				const deadline = Date.now() + Math.min(Math.max(Number(url.searchParams.get("wait") ?? 15_000) || 0, 0), 25_000);
@@ -274,7 +314,7 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				if (!url.searchParams.get("workspaceId")) return json(response, 400, { error: "Choose a workspace first." });
 				const workspaceId = url.searchParams.get("workspaceId")!, agentId = url.searchParams.get("agentId");
 				const root = await resolvePaseoWorkspacePath(paseoHome, workspaceId, projectPath);
-				const snapshot = await workspaceSnapshot(root, await eventScope(root, workspaceId, agentId), { workspaceId, agentId });
+				const snapshot = await workspaceSnapshot(root, await snapshotScope(root, workspaceId, agentId), { workspaceId, agentId });
 				const { source, ...progress } = snapshot.learning;
 				return json(response, 200, { progress: source === "default" ? null : { ...progress, source }, activeFile: snapshot.activity.activeFile,
 					actions: snapshot.actions, fallback: snapshot.fallback, budget: snapshot.budget, managed: snapshot.scope.managed });
@@ -283,6 +323,8 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 				const workspaceId = url.searchParams.get("workspaceId");
 				const activeProject = await resolvePaseoWorkspacePath(paseoHome, workspaceId ?? undefined, projectPath);
 				const sessionId = await resolveLearnSession(paseoHome, activeProject, workspaceId, url.searchParams.get("agentId"));
+				// Learn is session state: a managed project without a resolved student neither shows nor changes it.
+				const scope = await eventScope(activeProject).catch(error => { if (error instanceof WorkspaceIdentityRequiredError) throw error; return undefined; });
 				const settings = new LearnSettingsStore();
 				if (request.method === "POST") {
 					const body = await readBody(request) as { learnMode?: unknown };
@@ -290,9 +332,8 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 					await settings.write(activeProject, sessionId, body.learnMode);
 					// Mirror the toggle into this project's workspace only. Learn is scaffolding, so capabilities are untouched.
 					try {
-						// Learn is session state: only this conversation's surfaces follow the toggle.
-						const scope = await eventScope(activeProject);
-						workspaceEvents.emit({ ...scope, sessionId }, "learn", { type: body.learnMode ? "learn.enabled" : "learn.disabled" });
+						// Only this conversation's surfaces follow the toggle.
+						if (scope) workspaceEvents.emit({ ...scope, sessionId }, "learn", { type: body.learnMode ? "learn.enabled" : "learn.disabled" });
 						await eventJournal.flush();
 					} catch { /* Activity is best-effort; the setting itself is saved. */ }
 				}
@@ -471,9 +512,23 @@ export function createEcosystemBridgeServer(projectPath: string, paseoHome?: str
 			}
 			return json(response, 404, { error: "Not found" });
 		} catch (error) {
+			// Explicit unavailable state for a managed workspace whose student could not be resolved.
+			if (error instanceof WorkspaceIdentityRequiredError) return json(response, 403, { error: error.message, workspace: "identity_required" });
 			return json(response, error instanceof CompletionError ? error.status : 500, { error: safeError(error) });
 		}
 	});
+}
+
+function admissionSignal(decision: ModelAdmissionDecision): Pick<StudentCapabilityInputs, "exhausted" | "agentExhausted" | "warning"> {
+	return decision.blocked ? { exhausted: "The AI budget or model approval blocks this request." }
+		: decision.agentBlocked ? { agentExhausted: "The AI implementation budget has been reached." }
+			: decision.warning ? { warning: "AI usage is approaching its limit." } : {};
+}
+
+/** A managed workspace without a resolved student: only manual work, no workspace, session or map state. */
+function identityRequiredSnapshot(error: WorkspaceIdentityRequiredError): StudentWorkspaceSnapshot {
+	return buildStudentWorkspaceSnapshot({ workspace: { ui: { openFiles: [], recentChanges: [] }, capabilities: unavailableStudentCapabilities(error.message, "identity_required") },
+		session: {}, map: NO_MAP, identityRequired: true });
 }
 
 async function resolvePaseoEnvironmentState(root: string, resolve: (root: string) => Promise<{ context: Pick<ExecutionContext, "sandbox" | "environment"> }>) {

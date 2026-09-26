@@ -16,8 +16,9 @@ if (!executablePath && process.env.CI) throw new Error("The browser journey need
 
 let browser: Browser;
 let harness: Awaited<ReturnType<typeof startBrowserWorkspace>> | undefined;
-beforeAll(async () => { if (executablePath) browser = await chromium.launch({ executablePath, headless: true }); });
-afterAll(async () => { await browser?.close(); });
+// Launching and closing Chrome takes seconds on a loaded CI runner (the unit job tests every package at once).
+beforeAll(async () => { if (executablePath) browser = await chromium.launch({ executablePath, headless: true }); }, 60_000);
+afterAll(async () => { await browser?.close(); }, 60_000);
 afterEach(async () => { await harness?.close(); harness = undefined; }, 30_000);
 
 const poll = <T>(read: () => Promise<T>, timeout = 15_000) => expect.poll(read, { timeout, interval: 150 });

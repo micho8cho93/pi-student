@@ -24,6 +24,7 @@ export type WorkspaceCapabilityResolver = (observed: Pick<StudentCapabilityInput
  * Who this Chat is: the signed-in student (from the authorized ExecutionContext)
  * and the Pi session id. The student keys project state; the session keys
  * transient Chat state such as Learn, prompts, model health and budget.
+ * Resolved on every bind; a managed project without a student has no activity.
  */
 export type WorkspaceSessionIdentity = () => Promise<{ userId?: string; sessionId?: string }>;
 
@@ -57,7 +58,14 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 	// What this session last told other surfaces about its model and learning progress.
 	let modelAvailable: boolean | undefined;
 	let progress: string | undefined;
-	const pending = new Map<string, { file?: string; existed: boolean; command?: string; test: boolean }>();
+	/**
+	 * Bumped whenever this Chat is bound to another project, student or session (or
+	 * to none). Tool calls and turns remember the binding they started under, so a
+	 * delayed result never becomes activity of the newly bound scope.
+	 */
+	let binding = 0;
+	let turnBinding = 0;
+	const pending = new Map<string, { file?: string; existed: boolean; command?: string; test: boolean; binding: number }>();
 	const emit: WorkspaceActivityEmitter = (source, event) => {
 		if (!scope) return;
 		try { stream.emit(scope, source, event); } catch { /* Activity is best-effort metadata. */ }
@@ -72,11 +80,15 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 	};
 	const bind = async () => {
 		const identity = await options.identity?.().catch(() => ({})) ?? {};
-		const next = await resolveWorkspaceEventScope(workflow.state.cwd, await contextStore.read().catch(() => ({})), identity);
-		const moved = scope && (workspaceEventKey(scope) !== workspaceEventKey(next) || scope.sessionId !== next.sessionId);
-		// Editor selections, test failures and file lists from the previous project or student must not follow this Chat.
+		// Fails closed: a managed project whose student cannot be resolved binds no scope, so nothing is read, written or shown.
+		const next = await resolveWorkspaceEventScope(workflow.state.cwd, await contextStore.read().catch(() => ({})), identity).catch(() => undefined);
+		const projectMoved = scope && (!next || workspaceEventKey(scope) !== workspaceEventKey(next));
+		const moved = projectMoved || (scope && scope.sessionId !== next!.sessionId);
 		if (moved) {
-			stream.forget(scope!);
+			// Editor selections, test failures and file lists from the previous project or student must not follow this Chat.
+			// Another session of the same student project shares that project state, so it is kept.
+			if (projectMoved) stream.forget(scope!);
+			binding++;
 			pending.clear();
 			exhausted = undefined;
 			agentExhausted = undefined;
@@ -84,9 +96,10 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 			progress = undefined;
 		}
 		scope = next;
+		if (!scope) { capabilities = undefined; return; }
 		await stream.refresh(scope).catch(() => {});
 		const current = capabilitySnapshot();
-		const changed = moved ? ["project"] : capabilities ? Object.keys(current).filter(key => current[key] !== capabilities![key]) : [];
+		const changed = projectMoved ? ["project"] : capabilities ? Object.keys(current).filter(key => current[key] !== capabilities![key]) : [];
 		capabilities = current;
 		if (changed.length) emit("runtime", { type: "capability.changed", changed });
 		// Tell Code, Map and Terminal which Learn setting this chat uses in this project. Never copied from the previous project.
@@ -115,6 +128,7 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		pi.on("session_start", async () => { await bind(); });
 		pi.on("before_agent_start", async event => {
 			await bind();
+			turnBinding = binding;
 			const learnMode = workflow.state.learnMode === true;
 			// Build before recording this prompt, so "since the previous AI turn" ends here.
 			// A /question turn gets the student's current work instead, so the question is about what they are doing.
@@ -129,13 +143,18 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		});
 		pi.on("model_select", async event => { emit("chat", { type: "model.changed", model: `${event.model.provider}/${event.model.id}` }); });
 		pi.on("tool_call", async event => {
+			const started = binding;
 			if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-				pending.set(event.toolCallId, { file: relative(event.input.path), existed: await sandbox.fileExists(event.input.path).catch(() => true), test: false });
+				const file = relative(event.input.path);
+				const existed = await sandbox.fileExists(event.input.path).catch(() => true);
+				// The Chat was rebound while checking the file: this call belongs to the previous scope.
+				if (started !== binding) return;
+				pending.set(event.toolCallId, { file, existed, test: false, binding: started });
 			}
 			if (isToolCallEventType("bash", event)) {
 				const command = event.input.command.trim();
 				const test = TEST_COMMAND.test(command);
-				pending.set(event.toolCallId, { command, existed: false, test });
+				pending.set(event.toolCallId, { command, existed: false, test, binding: started });
 				// Agent commands come from the chat surface; the student's own terminal reports as "terminal".
 				emit("chat", { type: "terminal.command_started", command });
 				if (test) emit("chat", { type: "test.started", command });
@@ -144,7 +163,7 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		pi.on("tool_result", async event => {
 			const call = pending.get(event.toolCallId);
 			pending.delete(event.toolCallId);
-			if (!call) return;
+			if (!call || call.binding !== binding) return;
 			if (call.file && !event.isError) emit("chat", { type: "agent.files_changed", files: [{ file: call.file, kind: call.existed ? "modified" : "created" }] });
 			if (call.command) {
 				const output = event.content.filter(part => part.type === "text").map(part => part.text).join("\n");
@@ -158,6 +177,8 @@ export function createWorkspaceActivity(workflow: WorkflowController, sandbox: S
 		});
 		pi.on("message_end", async (event, ctx) => {
 			if (event.message.role !== "assistant") return;
+			// A reply to a turn started under a previous binding says nothing about this project, student or session.
+			if (turnBinding !== binding) return;
 			const state = capabilityState(workflow);
 			const reached = state.limitReached();
 			const agentReached = state.agentLimitReached();

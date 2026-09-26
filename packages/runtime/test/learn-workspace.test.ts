@@ -31,8 +31,8 @@ async function directory(prefix = "pi-learn-ws-") {
 }
 
 type Handler = (event: any, ctx?: any) => Promise<any>;
-/** A chat session wired to a shared stream, as the runtime does for each Pi session. */
-async function chat(workspace: string, stream: WorkspaceEventStream) {
+/** A chat session wired to a shared stream, as the runtime does for each Pi session: a signed-in student and a Pi session id. */
+async function chat(workspace: string, stream: WorkspaceEventStream, sessionId = "session-a") {
 	const handlers = new Map<string, Handler[]>();
 	const pi = { on: (name: string, handler: Handler) => handlers.set(name, [...(handlers.get(name) ?? []), handler]) };
 	const fire = async (name: string, event: object = {}) => {
@@ -43,7 +43,8 @@ async function chat(workspace: string, stream: WorkspaceEventStream) {
 	let selection: TeacherContext = {};
 	const workflow = new WorkflowController(createLearningSession(workspace));
 	const sandbox = { getWorkspacePath: () => "/workspace", fileExists: async () => true } as never;
-	const activity = createWorkspaceActivity(workflow, sandbox, { stream, contextStore: { read: async () => selection, write: async value => { selection = value; } } });
+	const activity = createWorkspaceActivity(workflow, sandbox, { stream, contextStore: { read: async () => selection, write: async value => { selection = value; } },
+		identity: async () => ({ userId: "student-a", sessionId }) });
 	activity.extension(pi as never);
 	await fire("session_start");
 	return { fire, workflow, activity, select: (value: TeacherContext) => { selection = value; } };
@@ -98,7 +99,7 @@ describe("Learn Mode across Chat, Code, Map and Terminal", () => {
 	it("does not leak Learn state across projects", async () => {
 		const stream = await sharedStream();
 		const a = await chat(await directory("pi-learn-a-"), stream);
-		const b = await chat(await directory("pi-learn-b-"), stream);
+		const b = await chat(await directory("pi-learn-b-"), stream, "session-b");
 		a.workflow.setLearnMode(true);
 		await a.fire("before_agent_start", { systemPrompt: "base" });
 		expect(stream.ui(a.activity.scope()!).learn?.enabled).toBe(true);

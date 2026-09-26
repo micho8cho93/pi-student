@@ -44,9 +44,11 @@ export interface StudentWorkspaceSnapshotInput {
 	/** The session's durable Learn setting, used until Chat reports the setting it actually used. */
 	learnSetting?: boolean;
 	map: WorkspaceMapStatus;
+	/** A managed project whose student could not be resolved; everything else must then be empty. */
+	identityRequired?: boolean;
 }
 
-const MODEL_CODES = new Set<CapabilityRestriction>(["no_model", "provider_unavailable", "project_not_selected"]);
+const MODEL_CODES = new Set<CapabilityRestriction>(["no_model", "provider_unavailable", "project_not_selected", "identity_required"]);
 
 /**
  * Derives the current StudentWorkspaceSnapshot. Nothing here is stored: every
@@ -75,7 +77,7 @@ export function buildStudentWorkspaceSnapshot(input: StudentWorkspaceSnapshotInp
 	const selectedNode = ui.flowchart?.selectedNode;
 	const lastRun = workspace.ui.tests?.lastRun;
 	const body: Omit<StudentWorkspaceSnapshot, "revision"> = {
-		scope: { managed: Boolean(capabilities.projectId), ...(workspace.scope?.projectId ? { projectId: workspace.scope.projectId } : {}),
+		scope: input.identityRequired ? { managed: true, session: false, identityRequired: true } : { managed: Boolean(capabilities.projectId), ...(workspace.scope?.projectId ? { projectId: workspace.scope.projectId } : {}),
 			...(workspace.scope?.classId ? { classId: workspace.scope.classId } : {}), ...(workspace.scope?.organizationId ? { organizationId: workspace.scope.organizationId } : {}),
 			session: Boolean(workspace.scope?.sessionId) },
 		learning,

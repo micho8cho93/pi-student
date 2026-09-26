@@ -5,6 +5,8 @@ import type { LearningStage, ThinkingLevel } from "./policy.js";
 /** Machine-readable cause of a restriction. UI surfaces map these to student-facing labels. */
 export type CapabilityRestriction =
 	| "project_not_selected"
+	/** A managed (class) project whose student the trusted identity layer could not resolve. */
+	| "identity_required"
 	| "no_model"
 	| "budget_exhausted"
 	/** Agent execution budget is used up; tutoring may still be available. */
@@ -210,7 +212,11 @@ export interface WorkspaceMapStatus {
 export interface StudentWorkspaceSnapshot {
 	/** Content hash; equal revisions mean nothing a surface shows has changed. */
 	revision: string;
-	scope: { managed: boolean; projectId?: string; classId?: string; organizationId?: string; session: boolean };
+	/**
+	 * identityRequired: a managed project whose signed-in student could not be resolved. The
+	 * snapshot then carries no workspace, session or map state, only what still works manually.
+	 */
+	scope: { managed: boolean; projectId?: string; classId?: string; organizationId?: string; session: boolean; identityRequired?: true };
 	learning: WorkspaceLearningProgress & {
 		/** live: published by the running Chat session; saved: its last persisted snapshot; default: no session state yet. */
 		source: "live" | "saved" | "default";

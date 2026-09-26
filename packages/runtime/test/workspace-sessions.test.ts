@@ -133,7 +133,7 @@ describe("project switch", () => {
 		const pi = { on: (name: string, handler: Handler) => handlers.set(name, [...(handlers.get(name) ?? []), handler]) };
 		const fire = async (name: string, event: object = {}) => { for (const handler of handlers.get(name) ?? []) await handler({ type: name, ...event }, { ui: { notify: () => {} } }); };
 		const activity = createWorkspaceActivity(new WorkflowController(createLearningSession(project)), { getWorkspacePath: () => "/workspace", fileExists: async () => true } as never,
-			{ stream: new WorkspaceEventStream({ journal: shared }), contextStore: { read: async () => selection, write: async () => {} }, identity: async () => ({ sessionId: "s" }) });
+			{ stream: new WorkspaceEventStream({ journal: shared }), contextStore: { read: async () => selection, write: async () => {} }, identity: async () => ({ userId: "student", sessionId: "s" }) });
 		activity.extension(pi as never);
 		await fire("session_start");
 		const personal = activity.scope()!;

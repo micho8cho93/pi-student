@@ -120,13 +120,13 @@ export async function createLearningAgentRuntime(
 		if (!sandboxRuntime.isRunning()) await sandboxRuntime.start(runtimeCwd);
 		const sandboxCwd = sandboxRuntime.getWorkspacePath();
 		const activityWorkflow = workflow;
-		// The signed-in student comes from the authorized context; resolved once per session, retried until it succeeds.
-		let student: string | undefined;
 		const activity = createWorkspaceActivity(workflow, sandboxRuntime, {
 			contextStore: options.services?.contextStore,
+			// The signed-in student comes from the authorized context on every bind: a student switch rebinds the
+			// workspace, and a failed lookup never reuses a previous student (a managed project then has no activity).
 			identity: async () => {
-				student ??= (await options.services?.executionContext?.().catch(() => undefined))?.identity.userId;
-				return { userId: student, sessionId: sessionManager.getSessionId() };
+				const student = (await options.services?.executionContext?.().catch(() => undefined))?.identity.userId;
+				return { ...(student ? { userId: student } : {}), sessionId: sessionManager.getSessionId() };
 			},
 			capabilities: async observed => {
 				const context = await options.services?.executionContext?.();

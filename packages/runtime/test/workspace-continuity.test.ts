@@ -46,6 +46,8 @@ async function workspace(options: { capabilities?: WorkspaceCapabilityResolver }
 		stream: new WorkspaceEventStream({ journal }),
 		contextStore: { read: async () => ({}), write: async () => {} },
 		capabilities: options.capabilities,
+		// A signed-out (personal) student in one Pi session.
+		identity: async () => ({ sessionId: "chat-session" }),
 	});
 	activity.extension(pi as never);
 	await fire("session_start");

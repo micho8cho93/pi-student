@@ -22,6 +22,10 @@ export type WorkspaceEventScope = Pick<WorkspaceScope, "projectPath" | "projectI
  * one project never share Learn, "since the previous AI turn", model health,
  * session budget or learning progress. Everything else (files, editor, tests,
  * terminal, map, project policy) is project-scoped and shared.
+ *
+ * Invariant: a session-scoped event requires a valid session id. Without one it is
+ * rejected on emit and dropped on replay; it is never stored under an empty or
+ * default session, and a session-less reader never sees it.
  */
 export const SESSION_SCOPED_EVENTS: ReadonlySet<WorkspaceEventType> = new Set<WorkspaceEventType>(["chat.prompted", "learn.enabled", "learn.disabled",
 	"question.completed", "model.changed", "model.health", "budget.warning", "budget.exhausted", "learning.progress"]);
@@ -51,20 +55,35 @@ export function workspaceEventKey(scope: WorkspaceEventScope): string {
 		...(scope.userId ? [scope.userId] : [])])).digest("hex");
 }
 
-/** Whether a reader bound to `sessionId` may see an event. Project events are visible to every session. */
+const validSession = (sessionId: unknown): sessionId is string => typeof sessionId === "string" && SESSION_ID.test(sessionId);
+
+/** Whether a reader bound to `sessionId` may see an event. Project events are visible to every session; session events only to their own. */
 export function visibleToSession(event: Pick<WorkspaceEvent, "type" | "session">, sessionId: string | undefined): boolean {
-	return !SESSION_SCOPED_EVENTS.has(event.type) || event.session === sessionId;
+	return !SESSION_SCOPED_EVENTS.has(event.type) || (validSession(sessionId) && event.session === sessionId);
+}
+
+/**
+ * A managed (class) workspace whose student could not be resolved by the trusted
+ * identity layer. Its state is unavailable: nothing is read, written or shown, and
+ * it never falls back to a personal, anonymous or previously signed-in student's state.
+ */
+export class WorkspaceIdentityRequiredError extends Error {
+	readonly code = "identity_required";
+	constructor() { super("Sign in to your class account to use this project's workspace activity. Your files, editor and terminal still work."); }
 }
 
 /**
  * Both the GUI bridge and the chat runtime derive the same scope from the
  * stored class selection, which only applies to the workspace it was bound to.
+ * `identity.userId` must come from the authenticated control plane. A personal
+ * workspace is valid without it; a managed one fails closed.
  */
 export async function resolveWorkspaceEventScope(projectPath: string, selection: TeacherContext = {},
 	identity: { userId?: string; sessionId?: string } = {}): Promise<WorkspaceEventScope> {
 	const resolved = await realpath(projectPath);
 	const bound = selection.projectId && selection.workspacePath && await realpath(selection.workspacePath).catch(() => undefined) === resolved;
-	if (identity.sessionId !== undefined && !SESSION_ID.test(identity.sessionId)) throw new Error("Workspace session identifier is invalid.");
+	if (identity.sessionId !== undefined && !validSession(identity.sessionId)) throw new Error("Workspace session identifier is invalid.");
+	if (bound && !identity.userId) throw new WorkspaceIdentityRequiredError();
 	return { projectPath: resolved, ...(bound ? { projectId: selection.projectId, organizationId: selection.organizationId } : {}),
 		...(identity.userId ? { userId: identity.userId } : {}), ...(identity.sessionId ? { sessionId: identity.sessionId } : {}) };
 }
@@ -347,7 +366,7 @@ interface WorkspaceRecord {
 	events: WorkspaceEvent[];
 	/** Project-scoped UI state, shared by every session. Session fields (learn) live in `sessions`. */
 	ui: WorkspaceUiState;
-	/** Keyed by session id ("" for events emitted without a session). */
+	/** Keyed by session id. Session-scoped events without a session are never stored. */
 	sessions: Map<string, WorkspaceSessionState>;
 	seen: Set<string>;
 }
@@ -381,7 +400,9 @@ export class WorkspaceEventStream {
 	emit(scope: WorkspaceEventScope, source: WorkspaceSurface, input: WorkspaceEventInput | Record<string, unknown>, allowed?: ReadonlySet<WorkspaceEventType>): WorkspaceEvent {
 		const record = this.record(scope);
 		const parsed = parseWorkspaceEventInput(record.scope.projectPath, input, allowed);
-		const session = SESSION_SCOPED_EVENTS.has(parsed.type) && scope.sessionId ? { session: scope.sessionId } : {};
+		const scoped = SESSION_SCOPED_EVENTS.has(parsed.type);
+		if (scoped && !validSession(scope.sessionId)) throw new Error("This workspace event belongs to a Chat session, and no session is bound.");
+		const session = scoped ? { session: scope.sessionId! } : {};
 		const event: WorkspaceEvent = { ...parsed, seq: ++this.seq, at: (this.options.now?.() ?? new Date()).toISOString(), workspace: workspaceEventKey(record.scope), source, origin: this.origin, ...session };
 		this.enqueue(record, event, true);
 		return event;
@@ -404,9 +425,11 @@ export class WorkspaceEventStream {
 			let parsed;
 			try { parsed = parseWorkspaceEventInput(record.scope.projectPath, value); } catch { continue; }
 			const source = (["editor", "chat", "terminal", "flowchart", "learn", "question", "runtime"] as const).find(item => item === value.source) ?? "runtime";
-			// A session id is only meaningful on session-scoped events; a malformed one drops the event rather than widening it to every session.
-			if (value.session !== undefined && (typeof value.session !== "string" || !SESSION_ID.test(value.session) || !SESSION_SCOPED_EVENTS.has(parsed.type))) continue;
-			const session = value.session ? { session: value.session } : {};
+			// Session-scoped events need a valid session and project events may not carry one: a missing,
+			// malformed or forged session drops the event rather than widening it to every reader.
+			const scoped = SESSION_SCOPED_EVENTS.has(parsed.type);
+			if (scoped ? !validSession(value.session) : value.session !== undefined) continue;
+			const session = scoped ? { session: value.session as string } : {};
 			this.enqueue(record, { ...parsed, seq: ++this.seq, at: new Date(at).toISOString(), workspace: key, source, origin: value.origin, ...session }, false);
 		}
 		if (record.seen.size > 5_000) record.seen = new Set([...record.seen].slice(-2_500));
@@ -427,17 +450,18 @@ export class WorkspaceEventStream {
 		return (this.workspaces.get(workspaceEventKey(scope))?.events ?? []).filter(event => visibleToSession(event, scope.sessionId));
 	}
 
-	/** Project UI state, with `learn` taken from `scope.sessionId`'s session. */
+	/** Project UI state, with `learn` taken from `scope.sessionId`'s session. A session-less reader gets project state only. */
 	ui(scope: WorkspaceEventScope): WorkspaceUiState {
 		const record = this.workspaces.get(workspaceEventKey(scope));
 		const ui = structuredClone(record?.ui ?? { openFiles: [], recentChanges: [] });
-		const learn = record?.sessions.get(scope.sessionId ?? "")?.learn;
-		return learn ? { ...ui, learn: { ...learn } } : ui;
+		const learn = this.session(scope).learn;
+		return learn ? { ...ui, learn } : ui;
 	}
 
-	/** Transient state of `scope.sessionId`'s Chat session. Empty when that session has published nothing. */
+	/** Transient state of `scope.sessionId`'s Chat session. Empty when no session is bound or it has published nothing. */
 	session(scope: WorkspaceEventScope): WorkspaceSessionState {
-		return structuredClone(this.workspaces.get(workspaceEventKey(scope))?.sessions.get(scope.sessionId ?? "") ?? {});
+		if (!validSession(scope.sessionId)) return {};
+		return structuredClone(this.workspaces.get(workspaceEventKey(scope))?.sessions.get(scope.sessionId) ?? {});
 	}
 
 	/** Drops transient state for a workspace, e.g. when the session moves to another project. */
@@ -455,10 +479,12 @@ export class WorkspaceEventStream {
 			while (this.queue.length) {
 				const next = this.queue.shift()!;
 				if (this.workspaces.get(next.event.workspace) !== next.record) continue;
+				const scoped = SESSION_SCOPED_EVENTS.has(next.event.type);
+				if (scoped && !validSession(next.event.session)) continue;
 				next.record.events = [...next.record.events, next.event].slice(-(this.options.limit ?? 200));
 				let stale: string[] = [];
-				if (SESSION_SCOPED_EVENTS.has(next.event.type)) {
-					const id = next.event.session ?? "";
+				if (scoped) {
+					const id = next.event.session!;
 					next.record.sessions.set(id, reduceSessionState(next.record.sessions.get(id) ?? {}, next.event));
 				} else ({ ui: next.record.ui, stale } = reduceWorkspaceUi(next.record.ui, next.event));
 				if (next.local) {

@@ -9,7 +9,7 @@ import { capabilityState } from "@pi-student/policy/capability-runtime";
 import { DEFAULT_CAPABILITY_POLICY } from "@pi-student/policy/capability-policy";
 import type { TeacherContext } from "@pi-student/telemetry/types";
 import { resolveWorkspaceEventScope, STUDENT_SURFACE_EVENTS, summarizeFailureOutput, WorkspaceEventJournal,
-	WorkspaceEventStream } from "../src/workspace-events.js";
+	WorkspaceEventStream, WorkspaceIdentityRequiredError } from "../src/workspace-events.js";
 import { buildWorkspaceChatContext } from "../src/workspace-chat-context.js";
 import { createWorkspaceActivity } from "../src/workspace-activity.js";
 
@@ -28,7 +28,7 @@ async function directory(prefix = "pi-events-") {
 
 describe("workspace event stream", () => {
 	it("delivers events in emission order, including events emitted by listeners", async () => {
-		const scope = { projectPath: await directory() };
+		const scope = { projectPath: await directory(), sessionId: "chat" };
 		const stream = new WorkspaceEventStream();
 		const seen: string[] = [];
 		stream.subscribe(scope, event => {
@@ -71,8 +71,10 @@ describe("workspace event stream", () => {
 		const project = await directory();
 		const other = await directory();
 		const selection: TeacherContext = { projectId: "project-a", organizationId: "org-a", workspacePath: project };
-		expect(await resolveWorkspaceEventScope(project, selection)).toEqual({ projectPath: project, projectId: "project-a", organizationId: "org-a" });
+		expect(await resolveWorkspaceEventScope(project, selection, { userId: "student-a" })).toEqual({ projectPath: project, projectId: "project-a", organizationId: "org-a", userId: "student-a" });
 		expect(await resolveWorkspaceEventScope(other, selection)).toEqual({ projectPath: other });
+		// The class project needs a student from the identity layer; it never becomes an anonymous scope.
+		await expect(resolveWorkspaceEventScope(project, selection)).rejects.toBeInstanceOf(WorkspaceIdentityRequiredError);
 	});
 
 	it("distinguishes student-authored and agent-authored edits", async () => {
@@ -165,6 +167,7 @@ describe("workspace activity in the chat session", () => {
 		const activity = createWorkspaceActivity(workflow, sandbox, {
 			stream: new WorkspaceEventStream({ journal }),
 			contextStore: { read: async () => selection, write: async value => { selection = value; } },
+			identity: async () => ({ userId: "student-a", sessionId: "chat" }),
 		});
 		activity.extension(pi as never);
 		await fire("session_start");

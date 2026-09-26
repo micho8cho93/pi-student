@@ -44,8 +44,13 @@ async function journey(policy?: EffectivePolicy) {
 	await mkdir(path.join(paseoHome, "projects"), { recursive: true });
 	await writeFile(path.join(paseoHome, "projects", "workspaces.json"), JSON.stringify(
 		Object.entries(projects).map(([id, cwd]) => ({ workspaceId: `wks_${id}`, cwd }))));
-	for (const cwd of Object.values(projects)) {
+	for (const [id, cwd] of Object.entries(projects)) {
 		await mkdir(cwd);
+		// Paseo's agent registry: the GUI names agent-<project>, the bridge resolves its Pi session.
+		const agents = path.join(paseoHome, "agents", cwd.replace(/^\//, "").replace(/[\\/]/g, "-"));
+		await mkdir(agents, { recursive: true });
+		await writeFile(path.join(agents, `agent-${id}.json`), JSON.stringify({ id: `agent-${id}`, provider: "pi-student", workspaceId: `wks_${id}`, cwd,
+			runtimeInfo: { sessionId: `session-${id}` } }));
 		await writeFile(path.join(cwd, "package.json"), JSON.stringify({ type: "module", scripts: { test: "node test.mjs" } }));
 		await writeFile(path.join(cwd, "score.js"), "export function score() { return 0; }\n");
 		await writeFile(path.join(cwd, "test.mjs"), "import { score } from './score.js';\nif (score() !== 2) { console.error('FAIL score.test.js > awards two points\\nAssertionError: expected score to equal 2'); process.exitCode = 1; }\n");
@@ -73,7 +78,9 @@ async function journey(policy?: EffectivePolicy) {
 			return { stopReason: "stop", content: [{ type: "text", text }] };
 		},
 	} as unknown as ModelRuntime;
-	const server = createEcosystemBridgeServer(projects.a, paseoHome, { resolveModelExecution: async cwd => ({ runtime, context: await context(cwd) }) });
+	// The signed-in student comes from the identity layer, for the bridge and every Chat.
+	const server = createEcosystemBridgeServer(projects.a, paseoHome, { resolveModelExecution: async cwd => ({ runtime, context: await context(cwd) }),
+		resolveIdentity: async () => ({ userId: "student" }) });
 	await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
 	cleanup.push(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -100,7 +107,8 @@ async function journey(policy?: EffectivePolicy) {
 		const sandbox = { getWorkspacePath: () => cwd, isRunning: () => true,
 			fileExists: async (file: string) => access(path.resolve(cwd, file)).then(() => true, () => false), setInternetAllowed: () => {} } as unknown as SandboxRuntime;
 		const capabilities = async (extra: StudentCapabilityInputs = {}) => resolveStudentCapabilities(await context(cwd), { usage: controls, ...observed, ...extra });
-		const activity = createWorkspaceActivity(workflow, sandbox, { stream: new WorkspaceEventStream({ journal }), contextStore: selection, capabilities });
+		const activity = createWorkspaceActivity(workflow, sandbox, { stream: new WorkspaceEventStream({ journal }), contextStore: selection, capabilities,
+			identity: async () => ({ userId: "student", sessionId: `session-${project}` }) });
 		createProjectCapabilitiesExtension(controls, sandbox)(pi as never);
 		activity.extension(pi as never);
 		const fire = async (name: string, data: Record<string, unknown> = {}) => {
@@ -223,7 +231,9 @@ describe("student journeys across the workspace", () => {
 		const h = await journey(); const chat = await h.chat();
 		chat.workflow.setLearnMode(true);
 		await h.journal.flush();
-		expect((await h.request("workspace-activity")).body.scaffolding.enabled).toBe(true);
+		// Learn belongs to this Chat: its conversation's surfaces follow it, a surface bound to no Chat does not.
+		expect((await h.request("workspace-activity?agentId=agent-a")).body.scaffolding.enabled).toBe(true);
+		expect((await h.request("workspace-activity")).body.scaffolding.enabled).toBe(false);
 		const graph = await h.map(); const node = graph.nodes[0];
 		await h.report({ ...node, type: "flowchart.node_selected" });
 		await h.report({ type: "file.opened", file: node.file });

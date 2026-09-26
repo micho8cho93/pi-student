@@ -69,6 +69,7 @@ const HEADLINES: Partial<Record<CapabilityRestriction, string>> = {
 	provider_unavailable: "The AI model is unavailable right now.",
 	no_model: "No AI model is available for this project.",
 	project_not_selected: "Select a class project to use AI help.",
+	identity_required: "Sign in to your class account to use AI help and workspace activity for this project.",
 	model_cannot_use_tools: "This model can continue helping you reason about the problem, but reliable file editing is unavailable.",
 	agent_editing_disabled: "Agent editing is unavailable for this project.",
 	sandbox_unavailable: "Agent editing is unavailable because the AI's workspace is not running.",
