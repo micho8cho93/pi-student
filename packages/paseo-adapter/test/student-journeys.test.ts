@@ -302,7 +302,7 @@ describe("student journeys across the workspace", () => {
 		expect(failed.body.fallback.canStill).toContain("edit the code yourself");
 		expect(graph.nodes[0].label).toBe("Award points");
 		expect((await h.request("workspace-activity")).body.flowchart.generatedAt).toBeTruthy();
-		await chat.fire("message_end", { message: { role: "assistant", stopReason: "error", content: [], usage: { totalTokens: 0, cost: { total: 0 } } } });
+		await chat.fire("message_end", { message: { role: "assistant", stopReason: "error", errorMessage: "503 provider unavailable", content: [], usage: { totalTokens: 0, cost: { total: 0 } } } });
 		expect(chat.notices.at(-1)).toContain("The AI model is unavailable right now");
 		await writeFile(path.join(h.projects.a, "score.js"), workingCode);
 		await h.report({ type: "file.changed", file: "score.js" });
