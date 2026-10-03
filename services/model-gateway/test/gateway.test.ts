@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createModelGateway } from "../src/index.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
 
 const projectId = "74000000-0000-0000-0000-000000000001";
 const profileId = "75000000-0000-0000-0000-000000000001";
@@ -82,4 +84,24 @@ it("rejects an expired student token before a budget reservation", async () => {
   expect(response.status).toBe(401);
   expect(rpc).not.toHaveBeenCalled();
   expect(upstream).not.toHaveBeenCalled();
+});
+
+it("leaves the reservation unsettled when the upstream provider fails", async () => {
+  const rpc = vi.fn(async (name: string) => name === "gateway_reserve_model_request"
+    ? { data: { allowed: true, warning: false, reservationId: "78000000-0000-0000-0000-000000000001", provider: "openai", providerModel: "gpt-test" }, error: null }
+    : { data: null, error: null });
+  const db = { auth: { getUser: vi.fn(async () => ({ data: { user: { id: "student-1" } }, error: null })) }, rpc } as unknown as Pick<SupabaseClient, "auth" | "rpc">;
+  const upstream = vi.fn(async () => new Response("Provider unavailable", { status: 503 }));
+  const server = createModelGateway({ db, providers: { openai: { baseUrl: "https://api.example.test/v1", apiKey: "server-secret" } }, fetchImpl: upstream as typeof fetch });
+  const body = JSON.stringify({ model: profileId, messages: [{ role: "user", content: "Hi" }] });
+  const request = Object.assign(Readable.from([body]), { method: "POST", url: `/projects/${projectId}/v1/chat/completions`,
+    headers: { authorization: "Bearer student-jwt", "x-pi-session-id": sessionId } }) as IncomingMessage;
+  const response = { writeHead: vi.fn(), end: vi.fn() } as unknown as ServerResponse;
+  const handler = server.listeners("request")[0] as (request: IncomingMessage, response: ServerResponse) => Promise<void>;
+  await handler(request, response);
+  expect(response.writeHead).toHaveBeenCalledWith(502, expect.any(Object));
+  expect(upstream).toHaveBeenCalledOnce();
+  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(rpc).toHaveBeenCalledWith("gateway_reserve_model_request", expect.any(Object));
+  expect(rpc).not.toHaveBeenCalledWith("gateway_settle_model_request", expect.any(Object));
 });
