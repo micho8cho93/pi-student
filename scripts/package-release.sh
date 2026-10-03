@@ -50,6 +50,9 @@ for workspace in \
 	packages/sandbox \
 	packages/sandbox-gondolin \
 	packages/classroom \
+	packages/organization \
+	packages/decision \
+	packages/classroom-ui \
 	packages/supabase-adapter \
 	packages/telemetry \
 	packages/publishing \
