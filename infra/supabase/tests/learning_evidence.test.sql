@@ -8,8 +8,8 @@ insert into auth.users(id,aud,role,email,raw_app_meta_data,raw_user_meta_data) v
   ('d1000000-0000-0000-0000-000000000003','authenticated','authenticated','evidence-student-a@example.test','{}','{}'),
   ('d1000000-0000-0000-0000-000000000004','authenticated','authenticated','evidence-student-b@example.test','{}','{}');
 insert into public.classes(id,teacher_id,name,join_code) values
-  ('d2000000-0000-0000-0000-000000000001','d1000000-0000-0000-0000-000000000001','Evidence A','EV-A-11'),
-  ('d2000000-0000-0000-0000-000000000002','d1000000-0000-0000-0000-000000000002','Evidence B','EV-B-22');
+  ('d2000000-0000-0000-0000-000000000001','d1000000-0000-0000-0000-000000000001','Evidence A','EVA-222'),
+  ('d2000000-0000-0000-0000-000000000002','d1000000-0000-0000-0000-000000000002','Evidence B','EVB-333');
 insert into public.class_members(class_id,user_id,role,status) values
   ('d2000000-0000-0000-0000-000000000001','d1000000-0000-0000-0000-000000000003','student','active'),
   ('d2000000-0000-0000-0000-000000000002','d1000000-0000-0000-000000000004','student','active');
