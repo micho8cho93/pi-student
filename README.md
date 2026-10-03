@@ -36,16 +36,11 @@ repository model, persistence, GUI integration, supported analysis and limitatio
 
 ## Install
 
-Once this repository's GitHub release location is configured, installation is
-one command:
+Install Pi Student from the latest GitHub release with one command:
 
 ```bash
-curl -fsSL https://github.com/OWNER/REPOSITORY/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/micho8cho93/pi-student/releases/latest/download/install.sh | sh
 ```
-
-The release workflow replaces the installer's release URL automatically. Replace
-`OWNER/REPOSITORY` above with this repository's GitHub slug when publishing; no
-remote is recorded in this source snapshot, so it cannot be filled in safely here.
 
 The default installer detects macOS/Linux and arm64/x64, downloads a
 checksum-verified Pi Student archive and a pinned application-owned Node
@@ -79,7 +74,7 @@ the application-owned Paseo daemon only when needed and opens
 The default is Terminal + GUI. A terminal-only installation is also available:
 
 ```bash
-curl -fsSL https://github.com/OWNER/REPOSITORY/releases/latest/download/install.sh | sh -s -- --terminal-only
+curl -fsSL https://github.com/micho8cho93/pi-student/releases/latest/download/install.sh | sh -s -- --terminal-only
 ```
 
 `--with-gui` is an explicit alias for the default install behavior.
