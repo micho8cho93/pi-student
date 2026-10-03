@@ -22,6 +22,9 @@ if (kind === "client") {
 		"packages/sdk/dist/index.js",
 		"packages/sandbox-gondolin/dist/index.js",
 		"packages/paseo-adapter/dist/index.js",
+		"packages/organization/dist/index.js",
+		"packages/decision/dist/index.js",
+		"packages/classroom-ui/dist/capability-editor.js",
 	]) assert.equal(has(required), true, `client artifact is missing ${required}`);
 	assert.equal(has("apps/teacher-console/dist/commands.js"), true, "client artifact must preserve the local teacher compatibility command");
 } else {
