@@ -1,0 +1,30 @@
+name: Notify Pi Dev
+
+on:
+  push:
+    branches: [main]
+
+# The source repository's GITHUB_TOKEN cannot dispatch to the target repository.
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch pi-student-main-updated
+        env:
+          GH_TOKEN: ${{ secrets.PI_DEV_DISPATCH_TOKEN }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing PI_DEV_DISPATCH_TOKEN. Create a fine-grained PAT restricted to micho8cho93/pi-dev with Contents: write, then save it in this repository's Actions secrets."
+            exit 1
+          fi
+          jq -n --arg repository "$SOURCE_REPOSITORY" --arg sha "$SOURCE_SHA" --arg ref "$SOURCE_REF" \
+            '{event_type: "pi-student-main-updated", client_payload: {repository: $repository, sha: $sha, ref: $ref}}' \
+            | gh api --method POST repos/micho8cho93/pi-dev/dispatches \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' --input -
